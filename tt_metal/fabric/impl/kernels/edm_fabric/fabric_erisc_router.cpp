@@ -2584,7 +2584,7 @@ void kernel_main() {
     }
 
     // helps ubenchmark performance
-    __asm__("nop");
+    //__asm__("nop");
 
     // initialize the local receiver channel buffers
     local_receiver_channels.init<channel_pools_args>(
@@ -2611,7 +2611,7 @@ void kernel_main() {
             local_sender_channel_worker_interfaces);
     }
 
-    __asm__("nop");
+    //__asm__("nop");
 
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[0],
