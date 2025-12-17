@@ -7,7 +7,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <tuple>
+//#include <tuple>
+#include <type_traits>
 #include <utility>
 #include <limits>
 
@@ -244,18 +245,59 @@ struct ReceiverChannelPointers {
     }
 };
 
+// Helper to get the maximum buffer size from the array at compile time
+template <auto& BufferSizes, size_t N>
+struct MaxBufferSize {
+    static constexpr size_t value = []() constexpr {
+        size_t max_size = 0;
+        for (size_t i = 0; i < N; ++i) {
+            if (BufferSizes[i] > max_size) {
+                max_size = BufferSizes[i];
+            }
+        }
+        return max_size;
+    }();
+};
+
 // Forward‐declare the Impl primary template:
 template <template <uint8_t> class ChannelType, auto& BufferSizes, typename Seq>
 struct ChannelPointersTupleImpl;
 
-// Provide the specialization that actually holds the tuple and `get<>`:
+// Array-based implementation for better RV32I performance
+// Uses aligned_storage to handle different buffer sizes with a C array
 template <template <uint8_t> class ChannelType, auto& BufferSizes, size_t... Is>
 struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is...>> {
-    std::tuple<ChannelType<BufferSizes[Is]>...> channel_ptrs;
+    static constexpr size_t N = sizeof...(Is);
+    static constexpr size_t MAX_SIZE = MaxBufferSize<BufferSizes, N>::value;
+    
+    // Use aligned storage for each channel to handle different sizes
+    using StorageType = typename std::aligned_storage<
+        sizeof(ChannelType<MAX_SIZE>),
+        alignof(ChannelType<MAX_SIZE>)
+    >::type;
+    
+    StorageType channel_ptrs[N];
 
     template <size_t I>
-    constexpr auto& get() {
-        return std::get<I>(channel_ptrs);
+    FORCE_INLINE auto& get() {
+        static_assert(I < N, "Index out of bounds");
+        return *reinterpret_cast<ChannelType<BufferSizes[I]>*>(&channel_ptrs[I]);
+    }
+
+    template <size_t I>
+    FORCE_INLINE const auto& get() const {
+        static_assert(I < N, "Index out of bounds");
+        return *reinterpret_cast<const ChannelType<BufferSizes[I]>*>(&channel_ptrs[I]);
+    }
+
+    // Helper to initialize all channels
+    template <size_t I = 0>
+    FORCE_INLINE void init_all() {
+        if constexpr (I < N) {
+            new (&channel_ptrs[I]) ChannelType<BufferSizes[I]>();
+            get<I>().init();
+            init_all<I + 1>();
+        }
     }
 };
 
@@ -265,11 +307,9 @@ struct ChannelPointersTuple {
     static constexpr size_t N = std::size(BufferSizes);
 
     static constexpr auto make() {
-        // call init() on each element and return it
+        // Use array-based storage and initialize each element
         auto channel_ptrs = ChannelPointersTupleImpl<ChannelType, BufferSizes, std::make_index_sequence<N>>{};
-        std::apply(
-            [&](auto&... chans) { ((chans.init()), ...); },
-            channel_ptrs.channel_ptrs);  // Apply to the actual tuple member
+        channel_ptrs.init_all();
         return channel_ptrs;
     }
 };

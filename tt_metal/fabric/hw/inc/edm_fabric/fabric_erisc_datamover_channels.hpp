@@ -313,27 +313,66 @@ using SenderEthChannel = typename SenderChannelTypeSelector<
 
 template <template <typename, size_t> class ChannelBase, typename HEADER_TYPE, size_t... BufferSizes>
 struct ChannelTuple {
-    std::tuple<ChannelBase<HEADER_TYPE, BufferSizes>...> channel_buffers;
+    static constexpr size_t N = sizeof...(BufferSizes);
+    static constexpr size_t buffer_sizes[N] = {BufferSizes...};
+    
+    // Calculate max buffer size at compile time
+    static constexpr size_t max_size = []() constexpr {
+        size_t max_val = 0;
+        for (size_t i = 0; i < N; ++i) {
+            size_t sz = buffer_sizes[i];
+            if (sz > max_val) max_val = sz;
+        }
+        return max_val;
+    }();
+    
+    // Use aligned storage for each channel to handle different sizes
+    using StorageType = typename std::aligned_storage<
+        sizeof(ChannelBase<HEADER_TYPE, max_size>),
+        alignof(ChannelBase<HEADER_TYPE, max_size>)
+    >::type;
+    
+    StorageType channel_buffers[N];
 
-    explicit ChannelTuple() = default;
+    explicit ChannelTuple() {
+        // Placement new for each channel with correct size
+        init_channels(std::index_sequence_for<decltype(BufferSizes)...>{});
+    }
+
+    template <size_t... Is>
+    void init_channels(std::index_sequence<Is...>) {
+        (new (&channel_buffers[Is]) ChannelBase<HEADER_TYPE, BufferSizes>(), ...);
+    }
 
     void init(
         const size_t channel_base_address[],
         const size_t buffer_size_bytes,
         const size_t header_size_bytes,
         const size_t channel_base_id) {
-        size_t idx = 0;
-
-        std::apply(
-            [&](auto&... chans) {
-                ((chans.init(channel_base_address[idx], buffer_size_bytes, header_size_bytes), ++idx), ...);
-            },
-            channel_buffers);
+        init_impl<0>(channel_base_address, buffer_size_bytes, header_size_bytes);
     }
 
     template <size_t I>
-    auto& get() {
-        return std::get<I>(channel_buffers);
+    void init_impl(
+        const size_t channel_base_address[],
+        const size_t buffer_size_bytes,
+        const size_t header_size_bytes) {
+        if constexpr (I < N) {
+            get<I>().init(channel_base_address[I], buffer_size_bytes, header_size_bytes);
+            init_impl<I + 1>(channel_base_address, buffer_size_bytes, header_size_bytes);
+        }
+    }
+
+    template <size_t I>
+    FORCE_INLINE auto& get() {
+        static_assert(I < N, "Index out of bounds");
+        return *reinterpret_cast<ChannelBase<HEADER_TYPE, buffer_sizes[I]>*>(&channel_buffers[I]);
+    }
+
+    template <size_t I>
+    FORCE_INLINE const auto& get() const {
+        static_assert(I < N, "Index out of bounds");
+        return *reinterpret_cast<const ChannelBase<HEADER_TYPE, buffer_sizes[I]>*>(&channel_buffers[I]);
     }
 };
 
@@ -801,16 +840,49 @@ struct ElasticSenderChannelWorkerInterface : public EdmChannelWorkerInterface<
     }
 };
 
-// A tuple of EDM channel worker interfaces (using static-sized implementation)
 template <uint8_t WORKER_HANDSHAKE_NOC, size_t... BufferSizes>
 struct EdmChannelWorkerInterfaceTuple {
-    // tuple of StaticSizedSenderChannelWorkerInterface<BufferSizes>...
-    std::tuple<tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, BufferSizes>...>
-        channel_worker_interfaces;
+    static constexpr size_t N = sizeof...(BufferSizes);
+    static constexpr size_t buffer_sizes[N] = {BufferSizes...};
+    
+    // Calculate max buffer size for storage
+    static constexpr size_t max_size = []() constexpr {
+        size_t max_val = 0;
+        for (size_t i = 0; i < N; ++i) {
+            if (buffer_sizes[i] > max_val) max_val = buffer_sizes[i];
+        }
+        return max_val;
+    }();
+    
+    // Use aligned storage array for worker interfaces
+    using InterfaceType = tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, max_size>;
+    using StorageType = typename std::aligned_storage<sizeof(InterfaceType), alignof(InterfaceType)>::type;
+    
+    StorageType channel_worker_interfaces[N];
+
+    EdmChannelWorkerInterfaceTuple() {
+        // Placement new for each interface
+        init_interfaces(std::index_sequence_for<decltype(BufferSizes)...>{});
+    }
+
+    template <size_t... Is>
+    void init_interfaces(std::index_sequence<Is...>) {
+        (new (&channel_worker_interfaces[Is]) 
+            tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, BufferSizes>(), ...);
+    }
 
     template <size_t I>
-    auto& get() {
-        return std::get<I>(channel_worker_interfaces);
+    FORCE_INLINE auto& get() {
+        static_assert(I < N, "Index out of bounds");
+        return *reinterpret_cast<tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, buffer_sizes[I]>*>(
+            &channel_worker_interfaces[I]);
+    }
+
+    template <size_t I>
+    FORCE_INLINE const auto& get() const {
+        static_assert(I < N, "Index out of bounds");
+        return *reinterpret_cast<const tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, buffer_sizes[I]>*>(
+            &channel_worker_interfaces[I]);
     }
 };
 
