@@ -36,6 +36,8 @@ FORCE_INLINE auto wrap_increment(T val) -> T {
     } else if constexpr (is_pow2) {
         return (val + 1) & (static_cast<T>(LIMIT - 1));
     } else {
+        //T const rc[2] = { static_cast<T>(val + 1) , static_cast<T>(0) };
+        //return rc[(val == static_cast<T>(LIMIT - 1))];
         return (val == static_cast<T>(LIMIT - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
     }
 }
@@ -43,6 +45,8 @@ FORCE_INLINE auto wrap_increment(T val) -> T {
 // Increments val and wraps to 0 if it reaches limit
 template <typename T>
 FORCE_INLINE auto wrap_increment(T val, T limit) -> T {
+    //T const rc[2] = { static_cast<T>(val + 1) , static_cast<T>(0) };
+    //return rc[(val == static_cast<T>(limit - 1))]; 
     return (val == static_cast<T>(limit - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
 }
 
@@ -58,6 +62,8 @@ FORCE_INLINE auto wrap_increment_n(T val, uint8_t increment) -> T {
     } else {
         T new_unadjusted_val = val + increment;
         bool wraps = new_unadjusted_val >= LIMIT;
+        //T const rc[2] = { static_cast<T>(new_unadjusted_val), static_cast<T>(new_unadjusted_val - LIMIT)};
+        //return rc[wraps];
         return wraps ? static_cast<T>(new_unadjusted_val - LIMIT) : static_cast<T>(new_unadjusted_val);
     }
 }
@@ -198,22 +204,25 @@ struct ChannelCounter {
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct OutboundReceiverChannelPointers {
+    using NUM_BUFFERS_TYPE = std::integral_constant<uint8_t, RECEIVER_NUM_BUFFERS>;
+
     uint32_t num_free_slots;
-    BufferIndex remote_receiver_buffer_index;
-    size_t cached_next_buffer_slot_addr;
+//    BufferIndex remote_receiver_buffer_index;
+//    size_t cached_next_buffer_slot_addr;
 
     FORCE_INLINE void init() {
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
-        this->remote_receiver_buffer_index = BufferIndex{0};
-        this->cached_next_buffer_slot_addr = 0;
+//        this->remote_receiver_buffer_index = BufferIndex{0};
+//        this->cached_next_buffer_slot_addr = 0;
     }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
-
+/*
     FORCE_INLINE void advance_remote_receiver_buffer_index() {
         remote_receiver_buffer_index =
             BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
     }
+*/
 };
 
 /*
@@ -244,6 +253,10 @@ struct ReceiverChannelPointers {
         completion_counter.reset();
     }
 };
+
+#define ARRAY_BACKED_CHANNEL_POINTERS_TUPLE 0
+
+#if defined(ARRAY_BACKED_CHANNEL_POINTERS_TUPLE)
 
 // Helper to get the maximum buffer size from the array at compile time
 template <auto& BufferSizes, size_t N>
@@ -313,5 +326,39 @@ struct ChannelPointersTuple {
         return channel_ptrs;
     }
 };
+
+#else
+
+// Forward‐declare the Impl primary template:
+template <template <uint8_t> class ChannelType, auto& BufferSizes, typename Seq>
+struct ChannelPointersTupleImpl;
+
+// Provide the specialization that actually holds the tuple and `get<>`:
+template <template <uint8_t> class ChannelType, auto& BufferSizes, size_t... Is>
+struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is...>> {
+    std::tuple<ChannelType<BufferSizes[Is]>...> channel_ptrs;
+
+    template <size_t I>
+    constexpr auto& get() {
+        return std::get<I>(channel_ptrs);
+    }
+};
+
+// Simplify the "builder" so that make() returns the Impl<…> directly:
+template <template <uint8_t> class ChannelType, auto& BufferSizes>
+struct ChannelPointersTuple {
+    static constexpr size_t N = std::size(BufferSizes);
+
+    static constexpr auto make() {
+        // call init() on each element and return it
+        auto channel_ptrs = ChannelPointersTupleImpl<ChannelType, BufferSizes, std::make_index_sequence<N>>{};
+        std::apply(
+            [&](auto&... chans) { ((chans.init()), ...); },
+            channel_ptrs.channel_ptrs);  // Apply to the actual tuple member
+        return channel_ptrs;
+    }
+};
+
+#endif
 
 }  // namespace tt::tt_fabric

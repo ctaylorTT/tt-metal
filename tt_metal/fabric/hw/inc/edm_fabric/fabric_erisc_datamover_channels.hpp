@@ -87,7 +87,7 @@ public:
         this->cached_next_buffer_slot_addr = this->buffer_addresses[next_packet_buffer_index.get()];
     }
 
-private:
+//private:
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
     std::size_t cached_next_buffer_slot_addr;
     BufferIndex next_packet_buffer_index;
@@ -103,6 +103,8 @@ constexpr bool USE_STATIC_SIZED_CHANNEL_BUFFERS = true;
 template <typename HEADER_TYPE, uint8_t NUM_BUFFERS, typename DERIVED_T>
 class EthChannelBufferInterface {
 public:
+    //using derived_type = DERIVED_T;
+
     explicit EthChannelBufferInterface() = default;
 
     FORCE_INLINE void init(size_t channel_base_address, size_t max_eth_payload_size_in_bytes, size_t header_size_bytes) {
@@ -141,8 +143,12 @@ public:
         return static_cast<const DERIVED_T*>(this)->get_cached_next_buffer_slot_addr_impl();
     }
 
-    FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
-        static_cast<DERIVED_T*>(this)->set_cached_next_buffer_slot_addr_impl(next_buffer_slot_addr);
+//    FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
+//        static_cast<DERIVED_T*>(this)->set_cached_next_buffer_slot_addr_impl(next_buffer_slot_addr);
+//    }
+
+    FORCE_INLINE void advance_remote_receiver_buffer_index() {
+        static_cast<DERIVED_T*>(this)->advance_remote_receiver_buffer_index_impl();
     }
 };
 
@@ -221,6 +227,8 @@ public:
     explicit StaticSizedEthChannelBuffer() = default;
 
     FORCE_INLINE void init_impl(size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes) {
+        this->next_packet_buffer_index = 0;
+
         buffer_size_in_bytes = buffer_size_bytes;
         max_eth_payload_size_in_bytes = buffer_size_in_bytes;
 
@@ -273,13 +281,20 @@ public:
         this->cached_next_buffer_slot_addr = next_buffer_slot_addr;
     }
 
-private:
+    FORCE_INLINE void advance_remote_receiver_buffer_index_impl() {
+        next_packet_buffer_index = wrap_increment<NUM_BUFFERS>(next_packet_buffer_index);
+        this->cached_next_buffer_slot_addr = this->buffer_addresses[next_packet_buffer_index];
+    }    
+
+//private:
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
 
+    //BufferIndex next_packet_buffer_index;
     // header + payload regions only
     std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
     std::size_t max_eth_payload_size_in_bytes;
+    std::size_t next_packet_buffer_index;
     std::size_t cached_next_buffer_slot_addr;
 };
 
