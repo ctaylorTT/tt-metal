@@ -116,7 +116,7 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] FORCE_INLINE volatile T* get_packet_header(const BufferIndex& buffer_index) const {
+    [[nodiscard]] FORCE_INLINE volatile T* get_packet_header(const size_t& buffer_index) const {
         return static_cast<const DERIVED_T*>(this)->template get_packet_header_impl<T>(buffer_index);
     }
 
@@ -254,12 +254,12 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] FORCE_INLINE volatile T* get_packet_header_impl(const BufferIndex& buffer_index) const {
+    [[nodiscard]] FORCE_INLINE volatile T* get_packet_header_impl(const size_t& buffer_index) const {
         return reinterpret_cast<volatile T*>(this->buffer_addresses[buffer_index]);
     }
 
     template <typename T>
-    [[nodiscard]] FORCE_INLINE size_t get_payload_size_impl(const BufferIndex& buffer_index) const {
+    [[nodiscard]] FORCE_INLINE size_t get_payload_size_impl(const size_t& buffer_index) const {
         return get_packet_header_impl<T>(buffer_index)->get_payload_size_including_header();
     }
     [[nodiscard]] FORCE_INLINE size_t get_channel_buffer_max_size_in_bytes_impl(const BufferIndex& buffer_index) const {

@@ -10,9 +10,9 @@
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
-struct ReceiverChannelCounterBasedResponseCreditSender {
+struct alignas(4) ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
-    ReceiverChannelCounterBasedResponseCreditSender(size_t receiver_channel_index) :
+    ReceiverChannelCounterBasedResponseCreditSender(size_t const receiver_channel_index) :
         completion_counters_base_ptr(
             reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)),
         ack_counters_base_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)),
@@ -24,14 +24,14 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         }
     }
 
-    FORCE_INLINE void send_completion_credit(uint8_t src_id) {
+    FORCE_INLINE void send_completion_credit(uint8_t const src_id) {
         completion_counters[src_id]++;
         completion_counters_base_ptr[src_id] = completion_counters[src_id];
         update_sender_side_credits();
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
-    FORCE_INLINE void send_ack_credit(uint8_t src_id) {
+    FORCE_INLINE void send_ack_credit(uint8_t const src_id) {
         ack_counters[src_id]++;
         ack_counters_base_ptr[src_id] = ack_counters[src_id];
         update_sender_side_credits();
@@ -53,7 +53,7 @@ private:
     }
 };
 
-struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
+struct alignas(4) ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {
         for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
             sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
@@ -61,12 +61,12 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
         }
     }
 
-    FORCE_INLINE void send_completion_credit(uint8_t src_id) {
+    FORCE_INLINE void send_completion_credit(uint8_t const src_id) {
         remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], 1);
     }
 
     // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
-    FORCE_INLINE void send_ack_credit(uint8_t src_id) {
+    FORCE_INLINE void send_ack_credit(uint8_t const src_id) {
         remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_ack_stream_ids[src_id], 1);
     }
 
@@ -77,7 +77,8 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
 using ReceiverChannelResponseCreditSender = typename std::conditional_t<
     multi_txq_enabled,
     ReceiverChannelCounterBasedResponseCreditSender,
-    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender>;
+    ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender
+>;
 
 template <typename T = void>
 struct init_receiver_channel_response_credit_senders_impl;
@@ -86,9 +87,9 @@ struct init_receiver_channel_response_credit_senders_impl;
 template <>
 struct init_receiver_channel_response_credit_senders_impl<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender> {
     template <uint8_t NUM_RECEIVER_CHANNELS>
-    static constexpr auto init()
+    FORCE_INLINE static constexpr auto init()
         -> std::array<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender, NUM_RECEIVER_CHANNELS> {
-        std::array<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender, NUM_RECEIVER_CHANNELS> credit_senders;
+        std::array<ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender, NUM_RECEIVER_CHANNELS> credit_senders{};
         for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
             credit_senders[i] = ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender();
         }
@@ -100,8 +101,8 @@ struct init_receiver_channel_response_credit_senders_impl<ReceiverChannelStreamR
 template <>
 struct init_receiver_channel_response_credit_senders_impl<ReceiverChannelCounterBasedResponseCreditSender> {
     template <uint8_t NUM_RECEIVER_CHANNELS>
-    static constexpr auto init() -> std::array<ReceiverChannelCounterBasedResponseCreditSender, NUM_RECEIVER_CHANNELS> {
-        std::array<ReceiverChannelCounterBasedResponseCreditSender, NUM_RECEIVER_CHANNELS> credit_senders;
+    FORCE_INLINE static constexpr auto init() -> std::array<ReceiverChannelCounterBasedResponseCreditSender, NUM_RECEIVER_CHANNELS> {
+        std::array<ReceiverChannelCounterBasedResponseCreditSender, NUM_RECEIVER_CHANNELS> credit_senders{};
         for (size_t i = 0; i < NUM_RECEIVER_CHANNELS; i++) {
             credit_senders[i] = ReceiverChannelCounterBasedResponseCreditSender(i);
         }
@@ -115,9 +116,9 @@ constexpr FORCE_INLINE auto init_receiver_channel_response_credit_senders()
     return init_receiver_channel_response_credit_senders_impl<ReceiverChannelResponseCreditSender>::template init<
         NUM_RECEIVER_CHANNELS>();
 }
-struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
+struct alignas(4) SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
-    SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
+    SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t const sender_channel_index) :
         acks_received_counter_ptr(
             reinterpret_cast<volatile uint32_t*>(to_sender_remote_ack_counters_base_address) + sender_channel_index),
         completions_received_counter_ptr(
@@ -132,15 +133,17 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
         return *acks_received_counter_ptr - acks_received_and_processed;
     }
 
-    FORCE_INLINE void increment_num_processed_acks(size_t num_acks) { acks_received_and_processed += num_acks; }
+    FORCE_INLINE void increment_num_processed_acks(size_t const num_acks) {
+        acks_received_and_processed += num_acks;
+    }
 
     template <bool RISC_CPU_DATA_CACHE_ENABLED>
-    FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() {
+    FORCE_INLINE uint32_t get_num_unprocessed_completions_from_receiver() const {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
         return *completions_received_counter_ptr - completions_received_and_processed;
     }
 
-    FORCE_INLINE void increment_num_processed_completions(size_t num_completions) {
+    FORCE_INLINE void increment_num_processed_completions(size_t const num_completions) {
         completions_received_and_processed += num_completions;
     }
 
@@ -150,9 +153,9 @@ struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     uint32_t completions_received_and_processed = 0;
 };
 
-struct SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
+struct alignas(4) SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver() = default;
-    SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t sender_channel_index) :
+    SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t const sender_channel_index) :
         to_sender_packets_acked_stream(to_sender_packets_acked_streams[sender_channel_index]),
         to_sender_packets_completed_stream(to_sender_packets_completed_streams[sender_channel_index]) {}
 
@@ -187,10 +190,10 @@ template <>
 struct init_sender_channel_from_receiver_credits_flow_controllers_impl<
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver> {
     template <uint8_t NUM_SENDER_CHANNELS>
-    static constexpr auto init()
+    FORCE_INLINE static constexpr auto init()
         -> std::array<SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver, NUM_SENDER_CHANNELS> {
         std::array<SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver, NUM_SENDER_CHANNELS>
-            flow_controllers;
+            flow_controllers{};
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
             new (&flow_controllers[i]) SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(i);
         }
@@ -203,9 +206,9 @@ template <>
 struct init_sender_channel_from_receiver_credits_flow_controllers_impl<
     SenderChannelFromReceiverCounterBasedCreditsReceiver> {
     template <uint8_t NUM_SENDER_CHANNELS>
-    static constexpr auto init()
+    FORCE_INLINE static constexpr auto init()
         -> std::array<SenderChannelFromReceiverCounterBasedCreditsReceiver, NUM_SENDER_CHANNELS> {
-        std::array<SenderChannelFromReceiverCounterBasedCreditsReceiver, NUM_SENDER_CHANNELS> flow_controllers;
+        std::array<SenderChannelFromReceiverCounterBasedCreditsReceiver, NUM_SENDER_CHANNELS> flow_controllers{};
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
             new (&flow_controllers[i]) SenderChannelFromReceiverCounterBasedCreditsReceiver(i);
         }
@@ -216,7 +219,8 @@ struct init_sender_channel_from_receiver_credits_flow_controllers_impl<
 using SenderChannelFromReceiverCredits = typename std::conditional_t<
     multi_txq_enabled,
     SenderChannelFromReceiverCounterBasedCreditsReceiver,
-    SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver>;
+    SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver
+>;
 
 // SFINAE-based overload for multi_txq_enabled case
 template <uint8_t NUM_SENDER_CHANNELS>
@@ -237,7 +241,7 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
 // MUST CHECK !is_eth_txq_busy() before calling
 template <bool CHECK_BUSY>
 FORCE_INLINE void receiver_send_completion_ack(
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    ReceiverChannelResponseCreditSender & receiver_channel_response_credit_sender, uint8_t const src_id) {
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
         };
@@ -247,7 +251,7 @@ FORCE_INLINE void receiver_send_completion_ack(
 
 template <bool CHECK_BUSY>
 FORCE_INLINE void receiver_send_received_ack(
-    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    ReceiverChannelResponseCreditSender & receiver_channel_response_credit_sender, uint8_t const src_id) {
     if constexpr (CHECK_BUSY) {
         while (internal_::eth_txq_is_busy(receiver_txq_id)) {
         };
