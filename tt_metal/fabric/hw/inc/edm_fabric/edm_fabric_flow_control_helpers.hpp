@@ -27,8 +27,8 @@ using BufferPtr = NamedType<uint8_t, struct BufferPtrType>;
 
 // Increments val and wraps to 0 if it reaches limit
 template <size_t LIMIT = 0, typename T>
-FORCE_INLINE auto wrap_increment(T val) -> T {
-    constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
+FORCE_INLINE auto wrap_increment(T const val) -> T {
+    constexpr bool const is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
     if constexpr (LIMIT == 1) {
         return val;
     } else if constexpr (LIMIT == 2) {
@@ -36,23 +36,19 @@ FORCE_INLINE auto wrap_increment(T val) -> T {
     } else if constexpr (is_pow2) {
         return (val + 1) & (static_cast<T>(LIMIT - 1));
     } else {
-        //T const rc[2] = { static_cast<T>(val + 1) , static_cast<T>(0) };
-        //return rc[(val == static_cast<T>(LIMIT - 1))];
         return (val == static_cast<T>(LIMIT - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
     }
 }
 
 // Increments val and wraps to 0 if it reaches limit
 template <typename T>
-FORCE_INLINE auto wrap_increment(T val, T limit) -> T {
-    //T const rc[2] = { static_cast<T>(val + 1) , static_cast<T>(0) };
-    //return rc[(val == static_cast<T>(limit - 1))]; 
+FORCE_INLINE auto wrap_increment(T const val, T const limit) -> T {
     return (val == static_cast<T>(limit - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
 }
 
 template <size_t LIMIT, typename T>
-FORCE_INLINE auto wrap_increment_n(T val, uint8_t increment) -> T {
-    constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
+FORCE_INLINE auto wrap_increment_n(T const val, uint8_t const increment) -> T {
+    constexpr bool const is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
     if constexpr (LIMIT == 1) {
         return val;
     } else if constexpr (LIMIT == 2) {
@@ -61,30 +57,28 @@ FORCE_INLINE auto wrap_increment_n(T val, uint8_t increment) -> T {
         return (val + increment) & (LIMIT - 1);
     } else {
         T new_unadjusted_val = val + increment;
-        bool wraps = new_unadjusted_val >= LIMIT;
-        //T const rc[2] = { static_cast<T>(new_unadjusted_val), static_cast<T>(new_unadjusted_val - LIMIT)};
-        //return rc[wraps];
+        bool const wraps = new_unadjusted_val >= LIMIT;
         return wraps ? static_cast<T>(new_unadjusted_val - LIMIT) : static_cast<T>(new_unadjusted_val);
     }
 }
 
 FORCE_INLINE
-auto normalize_ptr(BufferPtr ptr, uint8_t num_buffers) -> BufferIndex {
+auto normalize_ptr(BufferPtr const& ptr, uint8_t const num_buffers) -> BufferIndex {
     // note it may make sense to calculate this only when we increment
     // which will save calculations overall (but may add register pressure)
     // and introduce undesirable loads
-    bool normalize = ptr >= num_buffers;
-    uint8_t normalized_ptr = ptr.get() - static_cast<uint8_t>(normalize * num_buffers);
+    bool const normalize = ptr >= num_buffers;
+    uint8_t const normalized_ptr = ptr.get() - static_cast<uint8_t>(normalize * num_buffers);
     ASSERT(normalized_ptr < num_buffers);
     return BufferIndex{normalized_ptr};
 }
 template <uint8_t NUM_BUFFERS>
-FORCE_INLINE auto normalize_ptr(BufferPtr ptr) -> BufferIndex {
+FORCE_INLINE auto normalize_ptr(BufferPtr const& ptr) -> BufferIndex {
     static_assert(NUM_BUFFERS != 0, "normalize_ptr called with NUM_BUFFERS of 0; it must be greater than 0");
-    constexpr bool is_size_pow2 = NUM_BUFFERS != 0 && (NUM_BUFFERS & (NUM_BUFFERS - 1)) == 0;
-    constexpr bool is_size_2 = NUM_BUFFERS == 2;
-    constexpr bool is_size_1 = NUM_BUFFERS == 1;
-    constexpr uint8_t wrap_mask = NUM_BUFFERS - 1;
+    constexpr bool const is_size_pow2 = NUM_BUFFERS != 0 && (NUM_BUFFERS & (NUM_BUFFERS - 1)) == 0;
+    constexpr bool const is_size_2 = NUM_BUFFERS == 2;
+    constexpr bool const is_size_1 = NUM_BUFFERS == 1;
+    constexpr uint8_t const wrap_mask = NUM_BUFFERS - 1;
     if constexpr (is_size_pow2) {
         return BufferIndex{static_cast<uint8_t>(ptr.get() & wrap_mask)};
     } else if constexpr (is_size_2) {
@@ -125,14 +119,14 @@ class ChannelBufferPointer {
         "implementation");
 
 public:
-    static constexpr bool is_size_pow2 = (NUM_BUFFERS & (NUM_BUFFERS - 1)) == 0;
-    static constexpr bool is_size_2 = NUM_BUFFERS == 2;
-    static constexpr bool is_size_1 = NUM_BUFFERS == 1;
-    static constexpr uint8_t ptr_wrap_size = 2 * NUM_BUFFERS;
+    static constexpr bool const is_size_pow2 = (NUM_BUFFERS & (NUM_BUFFERS - 1)) == 0;
+    static constexpr bool const is_size_2 = NUM_BUFFERS == 2;
+    static constexpr bool const is_size_1 = NUM_BUFFERS == 1;
+    static constexpr uint8_t const ptr_wrap_size = 2 * NUM_BUFFERS;
 
     // Only to use if is_size_pow2
-    static constexpr uint8_t ptr_wrap_mask = (2 * NUM_BUFFERS) - 1;
-    static constexpr uint8_t buffer_wrap_mask = NUM_BUFFERS - 1;
+    static constexpr uint8_t const ptr_wrap_mask = (2 * NUM_BUFFERS) - 1;
+    static constexpr uint8_t const buffer_wrap_mask = NUM_BUFFERS - 1;
     ChannelBufferPointer() : ptr(0) {}
     /*
      * Returns the "raw" pointer - not usable to index the buffer channel
@@ -169,7 +163,7 @@ private:
 // Must call reset() before using
 template <uint8_t NUM_BUFFERS>
 struct ChannelCounter {
-    static constexpr bool IS_POW2_NUM_BUFFERS = is_power_of_2(NUM_BUFFERS);
+    static constexpr bool const IS_POW2_NUM_BUFFERS = is_power_of_2(NUM_BUFFERS);
     uint32_t counter;
     BufferIndex index;
 
@@ -204,25 +198,12 @@ struct ChannelCounter {
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct OutboundReceiverChannelPointers {
-    using NUM_BUFFERS_TYPE = std::integral_constant<uint8_t, RECEIVER_NUM_BUFFERS>;
-
     uint32_t num_free_slots;
-//    BufferIndex remote_receiver_buffer_index;
-//    size_t cached_next_buffer_slot_addr;
 
     FORCE_INLINE void init() {
         this->num_free_slots = RECEIVER_NUM_BUFFERS;
-//        this->remote_receiver_buffer_index = BufferIndex{0};
-//        this->cached_next_buffer_slot_addr = 0;
     }
 
-    FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
-/*
-    FORCE_INLINE void advance_remote_receiver_buffer_index() {
-        remote_receiver_buffer_index =
-            BufferIndex{wrap_increment<RECEIVER_NUM_BUFFERS>(remote_receiver_buffer_index.get())};
-    }
-*/
 };
 
 /*
@@ -254,81 +235,6 @@ struct ReceiverChannelPointers {
     }
 };
 
-#define ARRAY_BACKED_CHANNEL_POINTERS_TUPLE 0
-
-#if defined(ARRAY_BACKED_CHANNEL_POINTERS_TUPLE)
-
-// Helper to get the maximum buffer size from the array at compile time
-template <auto& BufferSizes, size_t N>
-struct MaxBufferSize {
-    static constexpr size_t value = []() constexpr {
-        size_t max_size = 0;
-        for (size_t i = 0; i < N; ++i) {
-            if (BufferSizes[i] > max_size) {
-                max_size = BufferSizes[i];
-            }
-        }
-        return max_size;
-    }();
-};
-
-// Forward‐declare the Impl primary template:
-template <template <uint8_t> class ChannelType, auto& BufferSizes, typename Seq>
-struct ChannelPointersTupleImpl;
-
-// Array-based implementation for better RV32I performance
-// Uses aligned_storage to handle different buffer sizes with a C array
-template <template <uint8_t> class ChannelType, auto& BufferSizes, size_t... Is>
-struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is...>> {
-    static constexpr size_t N = sizeof...(Is);
-    static constexpr size_t MAX_SIZE = MaxBufferSize<BufferSizes, N>::value;
-    
-    // Use aligned storage for each channel to handle different sizes
-    using StorageType = typename std::aligned_storage<
-        sizeof(ChannelType<MAX_SIZE>),
-        alignof(ChannelType<MAX_SIZE>)
-    >::type;
-    
-    StorageType channel_ptrs[N];
-
-    template <size_t I>
-    FORCE_INLINE auto& get() {
-        static_assert(I < N, "Index out of bounds");
-        return *reinterpret_cast<ChannelType<BufferSizes[I]>*>(&channel_ptrs[I]);
-    }
-
-    template <size_t I>
-    FORCE_INLINE const auto& get() const {
-        static_assert(I < N, "Index out of bounds");
-        return *reinterpret_cast<const ChannelType<BufferSizes[I]>*>(&channel_ptrs[I]);
-    }
-
-    // Helper to initialize all channels
-    template <size_t I = 0>
-    FORCE_INLINE void init_all() {
-        if constexpr (I < N) {
-            new (&channel_ptrs[I]) ChannelType<BufferSizes[I]>();
-            get<I>().init();
-            init_all<I + 1>();
-        }
-    }
-};
-
-// Simplify the "builder" so that make() returns the Impl<…> directly:
-template <template <uint8_t> class ChannelType, auto& BufferSizes>
-struct ChannelPointersTuple {
-    static constexpr size_t N = std::size(BufferSizes);
-
-    static constexpr auto make() {
-        // Use array-based storage and initialize each element
-        auto channel_ptrs = ChannelPointersTupleImpl<ChannelType, BufferSizes, std::make_index_sequence<N>>{};
-        channel_ptrs.init_all();
-        return channel_ptrs;
-    }
-};
-
-#else
-
 // Forward‐declare the Impl primary template:
 template <template <uint8_t> class ChannelType, auto& BufferSizes, typename Seq>
 struct ChannelPointersTupleImpl;
@@ -358,7 +264,5 @@ struct ChannelPointersTuple {
         return channel_ptrs;
     }
 };
-
-#endif
 
 }  // namespace tt::tt_fabric

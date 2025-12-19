@@ -3,11 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-
 #include "debug/assert.h"
-//#include "debug/dprint.h"
-//#include "debug/ring_buffer.h"
-
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -490,24 +486,19 @@ template <
     bool SKIP_CONNECTION_LIVENESS_CHECK,
     typename SenderChannelT,
     typename WorkerInterfaceT,
-    typename ReceiverPointersT,
     typename ReceiverChannelT>
 FORCE_INLINE void send_next_data(
     SenderChannelT& sender_buffer_channel,
     WorkerInterfaceT& sender_worker_interface,
-    ReceiverPointersT& outbound_to_receiver_channel_pointers,
+    uint32_t & outbound_to_receiver_channel_pointers_num_free_slots,
     ReceiverChannelT& receiver_buffer_channel,
     PerfTelemetryRecorder& perf_telemetry_recorder) {
 
-    //auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
-
-    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
-    uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
+    uint32_t const src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
+    auto const dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
-    
-    auto dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
 
     if constexpr (!skip_src_ch_id_update) {
         pkt_header->src_ch_id = sender_channel_index;
@@ -523,25 +514,18 @@ FORCE_INLINE void send_next_data(
     // messages)
     sender_worker_interface.template update_write_counter_for_send<SKIP_CONNECTION_LIVENESS_CHECK>();
 
-/*
-    outbound_to_receiver_channel_pointers.advance_remote_receiver_buffer_index();
-    
-    receiver_buffer_channel.set_cached_next_buffer_slot_addr(
-        receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
-*/
-
+    // Advance receiver buffer pointers
     receiver_buffer_channel.advance_remote_receiver_buffer_index();
     sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
-    
-    remote_receiver_num_free_slots--;
 
-    // update the remote reg
-    //static constexpr uint32_t packets_to_forward = 1;
+    outbound_to_receiver_channel_pointers_num_free_slots--;
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
+
+    // update the remote reg
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1);
 }
 
@@ -1373,13 +1357,12 @@ template <
     bool SKIP_CONNECTION_LIVENESS_CHECK,
     typename SenderChannelT,
     typename WorkerInterfaceT,
-    typename ReceiverPointersT,
     typename ReceiverChannelT,
     typename LocalTelemetryT>
 FORCE_INLINE bool run_sender_channel_step_impl(
     SenderChannelT& local_sender_channel,
     WorkerInterfaceT& local_sender_channel_worker_interface,
-    ReceiverPointersT& outbound_to_receiver_channel_pointers,
+    uint32_t & outbound_to_receiver_channel_pointers_num_free_slots,
     ReceiverChannelT& remote_receiver_channel,
     bool& channel_connection_established,
     uint32_t sender_channel_free_slots_stream_id,
@@ -1399,12 +1382,16 @@ FORCE_INLINE bool run_sender_channel_step_impl(
         "Bubble flow control and first level ack must be set to the same values");
 
     bool receiver_has_space_for_packet;
+
     if constexpr (use_bubble_flow_control) {
-        receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.num_free_slots >=
-                                        BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS;
+        receiver_has_space_for_packet = 
+            outbound_to_receiver_channel_pointers_num_free_slots >=
+                BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS;
     } else {
-        receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
+        receiver_has_space_for_packet =
+            static_cast<bool>(outbound_to_receiver_channel_pointers_num_free_slots);
     }
+
     uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
     bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
@@ -1424,9 +1411,11 @@ FORCE_INLINE bool run_sender_channel_step_impl(
         send_next_data<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
             local_sender_channel,
             local_sender_channel_worker_interface,
-            outbound_to_receiver_channel_pointers,
+            outbound_to_receiver_channel_pointers_num_free_slots,
             remote_receiver_channel,
-            perf_telemetry_recorder);
+            perf_telemetry_recorder
+        );
+
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -1438,7 +1427,8 @@ FORCE_INLINE bool run_sender_channel_step_impl(
     int32_t completions_since_last_check =
         sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
     if (completions_since_last_check) {
-        outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
+        // outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
+        outbound_to_receiver_channel_pointers_num_free_slots += completions_since_last_check;
         sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
 
         // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
@@ -1464,7 +1454,8 @@ FORCE_INLINE bool run_sender_channel_step_impl(
 
     if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
         auto check_connection_status =
-            !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
+            !channel_connection_established ||
+                local_sender_channel_worker_interface.has_worker_teardown_request();
         if (check_connection_status) {
             check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
                 local_sender_channel_worker_interface,
@@ -1481,13 +1472,12 @@ template <
     typename EthSenderChannels,
     typename EdmChannelWorkerIFs,
     typename RemoteEthReceiverChannels,
-    typename ReceiverPointersT,
     size_t NUM_SENDER_CHANNELS,
     typename LocalTelemetryT>
 FORCE_INLINE bool run_sender_channel_step(
     EthSenderChannels& local_sender_channels,
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
-    ReceiverPointersT& outbound_to_receiver_channel_pointers,
+    uint32_t & outbound_to_receiver_channel_pointers_num_free_slots,
     RemoteEthReceiverChannels& remote_receiver_channels,
     std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
@@ -1504,7 +1494,7 @@ FORCE_INLINE bool run_sender_channel_step(
             sender_ch_live_check_skip[sender_channel_index]>(
             local_sender_channels.template get<sender_channel_index>(),
             local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
-            outbound_to_receiver_channel_pointers,
+            outbound_to_receiver_channel_pointers_num_free_slots,
             remote_receiver_channels.template get<VC_RECEIVER_CHANNEL>(),
             channel_connection_established[sender_channel_index],
             local_sender_channel_free_slots_stream_ids[sender_channel_index],
@@ -1799,8 +1789,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto outbound_to_receiver_channel_pointers =
         ChannelPointersTuple<OutboundReceiverChannelPointers, REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make();
     // Workaround the perf regression in RingAsLinear test.
-    auto outbound_to_receiver_channel_pointer_ch0 =
-        outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>();
+    uint32_t & outbound_to_receiver_channel_pointer_ch0_num_free_slots =
+        outbound_to_receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>().num_free_slots;
 
     auto receiver_channel_pointers = ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>::make();
     // Workaround the perf regression in RingAsLinear test.
@@ -1848,7 +1838,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
-                outbound_to_receiver_channel_pointer_ch0,
+                outbound_to_receiver_channel_pointer_ch0_num_free_slots,
                 remote_receiver_channels,
                 channel_connection_established,
                 local_sender_channel_free_slots_stream_ids,
@@ -1868,7 +1858,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
-                outbound_to_receiver_channel_pointer_ch0,
+                outbound_to_receiver_channel_pointer_ch0_num_free_slots,
                 remote_receiver_channels,
                 channel_connection_established,
                 local_sender_channel_free_slots_stream_ids,
@@ -1879,7 +1869,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
+                    outbound_to_receiver_channel_pointer_ch0_num_free_slots,
                     remote_receiver_channels,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids,
@@ -1889,7 +1879,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
-                    outbound_to_receiver_channel_pointer_ch0,
+                    outbound_to_receiver_channel_pointer_ch0_num_free_slots,
                     remote_receiver_channels,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids,

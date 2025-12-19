@@ -284,12 +284,11 @@ public:
     FORCE_INLINE void advance_remote_receiver_buffer_index_impl() {
         next_packet_buffer_index = wrap_increment<NUM_BUFFERS>(next_packet_buffer_index);
         this->cached_next_buffer_slot_addr = this->buffer_addresses[next_packet_buffer_index];
-    }    
+    }
 
 //private:
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
 
-    //BufferIndex next_packet_buffer_index;
     // header + payload regions only
     std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
