@@ -499,6 +499,7 @@ FORCE_INLINE void send_next_data(
 
     volatile auto* pkt_header =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
+    
     size_t const payload_size_bytes =
         pkt_header->get_payload_size_including_header();
 
@@ -513,30 +514,25 @@ FORCE_INLINE void send_next_data(
 
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
-    // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
-    // messages)
     sender_worker_interface.template update_write_counter_for_send<SKIP_CONNECTION_LIVENESS_CHECK>();
-
-    // Advance receiver buffer pointers
-    
     receiver_buffer_channel.advance_remote_receiver_buffer_index();
     sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
 
-    --outbound_to_receiver_channel_pointers_num_free_slots;
+    outbound_to_receiver_channel_pointers_num_free_slots--;
 
     record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
 
+    // Step 11: Final TX queue wait
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
 
-    // update the remote reg
+    // Step 12: Update the remote register
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1);
 }
 
 /////////////////////////////////////////////
 //   RECEIVER SIDE HELPERS
 /////////////////////////////////////////////
-
 
 template <typename DownstreamSenderT>
 FORCE_INLINE bool can_forward_packet_completely(
@@ -768,8 +764,8 @@ template <uint8_t rx_channel_id, typename LocalRelayInterfaceT>
 FORCE_INLINE void forward_to_local_destination(
     LocalRelayInterfaceT& local_relay_interface,
     tt_l1_ptr PACKET_HEADER_TYPE* packet_start,
-    uint16_t payload_size_bytes,
-    uint8_t transaction_id) {
+    uint16_t const payload_size_bytes,
+    uint8_t const transaction_id) {
     if constexpr (udm_mode) {
         execute_chip_unicast_to_relay(
             local_relay_interface, packet_start, payload_size_bytes, transaction_id, rx_channel_id);
@@ -1236,9 +1232,9 @@ bool any_sender_channels_active(
 
 template <typename LocalTelemetryT>
 FORCE_INLINE void update_telemetry(
-    const std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered,
-    bool tx_progress,
-    bool rx_progress,
+    const std::array<uint32_t, NUM_SENDER_CHANNELS> & local_sender_channel_free_slots_stream_ids_ordered,
+    bool const tx_progress,
+    bool const rx_progress,
     LocalTelemetryT& local_fabric_telemetry,
     volatile tt_l1_ptr LocalTelemetryT* fabric_telemetry) {
     if constexpr (FABRIC_TELEMETRY_HEARTBEAT_TX) {
@@ -1549,7 +1545,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 // sender channel so we don't dynamically fetch it off the packet header
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
             } else {
-                auto receiver_buffer_index = ack_counter.get_buffer_index();
+                auto const receiver_buffer_index = ack_counter.get_buffer_index();
                 tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
                     local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
                 receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);

@@ -162,12 +162,16 @@ private:
 };
 
 // Must call reset() before using
+// Optimized for Baby RISC-V 32-bit architecture:
+// - alignas(4) ensures 4-byte alignment (no unaligned access penalties)
+// - counter (4 bytes) first at offset 0 for fastest access
+// - index (1 byte) at offset 4
+// - Compiler adds 3 bytes implicit padding to reach 8-byte total
 template <uint8_t NUM_BUFFERS>
 struct alignas(4) ChannelCounter {
-
-    uint32_t counter;
-    BufferIndex index;
-    constexpr static uint8_t const padding[3] = { 0, 0, 0 };  // Padding to align to 8 bytes
+    uint32_t counter;     // offset 0, size 4
+    BufferIndex index;    // offset 4, size 1 (+ 3 bytes implicit padding)
+    // Total size: 8 bytes
 
     FORCE_INLINE void reset() {
         this->counter = 0;
@@ -197,29 +201,34 @@ struct alignas(4) ChannelCounter {
 
 /*
  * Tracks receiver channel pointers (from sender side)
+ * Optimized for Baby RISC-V: minimal 4-byte structure, naturally aligned
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
-struct OutboundReceiverChannelPointers {
+struct alignas(4) OutboundReceiverChannelPointers {
     using NumBuffersType = std::integral_constant<uint8_t, RECEIVER_NUM_BUFFERS>;
 
-    uint32_t num_free_slots;
+    uint32_t num_free_slots;  // offset 0, size 4 (total: 4 bytes)
 
     OutboundReceiverChannelPointers() : num_free_slots(RECEIVER_NUM_BUFFERS) {}
-
 };
 
 /*
  * Tracks receiver channel pointers (from receiver side). Must call reset() before using.
+ * Optimized for Baby RISC-V:
+ * - 4 ChannelCounters (8 bytes each) = 32 bytes, all 4-byte aligned
+ * - Array placed last to avoid disrupting counter alignment
+ * - Hot-path counters are accessed more frequently than src_chan_ids lookups
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
 struct alignas(4) ReceiverChannelPointers {
     using NumBuffersType = std::integral_constant<uint8_t, RECEIVER_NUM_BUFFERS>;
 
-    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
-    ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
-    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;      // offset 0, size 8
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;     // offset 8, size 8
+    ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;          // offset 16, size 8
+    ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;   // offset 24, size 8
+    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;   // offset 32, size RECEIVER_NUM_BUFFERS
+    // Total size: 32 + RECEIVER_NUM_BUFFERS bytes (padded to 4-byte boundary)
 
     FORCE_INLINE void set_src_chan_id(BufferIndex const& buffer_index, uint8_t const src_chan_id) {
         src_chan_ids[buffer_index.get()] = src_chan_id;
