@@ -197,8 +197,8 @@ union NocCommandFields {
 static_assert(sizeof(NocCommandFields) == 40, "CommandFields size is not 40 bytes");
 
 struct UDMWriteControlHeader {
-    uint8_t src_chip_id;
     uint16_t src_mesh_id;
+    uint8_t src_chip_id;
     uint8_t src_noc_x;
     uint8_t src_noc_y;
     uint8_t risc_id;
@@ -208,12 +208,12 @@ struct UDMWriteControlHeader {
 } __attribute__((packed));
 
 struct UDMReadControlHeader {
-    uint8_t src_chip_id;
-    uint16_t src_mesh_id;
-    uint8_t src_noc_x;
-    uint8_t src_noc_y;
     uint32_t src_l1_address;
     uint32_t size_bytes;
+    uint16_t src_mesh_id;
+    uint8_t src_chip_id;
+    uint8_t src_noc_x;
+    uint8_t src_noc_y;
     uint8_t risc_id;
     uint8_t transaction_id;
     uint8_t initial_direction;
@@ -615,20 +615,20 @@ public:
     }
 };
 
-struct LowLatencyRoutingFields {
-    static constexpr uint32_t FIELD_WIDTH = 2;
-    static constexpr uint64_t FIELD_MASK = 0b11;
-    static constexpr uint32_t NOOP = 0b00;
-    static constexpr uint32_t WRITE_ONLY = 0b01;
-    static constexpr uint32_t FORWARD_ONLY = 0b10;
-    static constexpr uint32_t WRITE_AND_FORWARD = 0b11;
-    static constexpr uint32_t MAX_NUM_ENCODINGS = sizeof(uint64_t) * CHAR_BIT / FIELD_WIDTH;
-    static constexpr uint64_t FWD_ONLY_FIELD = 0xAAAAAAAAAAAAAAAAULL;
-    static constexpr uint64_t WR_ONLY_FIELD = 0x5555555555555555ULL;
+struct alignas(sizeof(uint64_t)) LowLatencyRoutingFields {
+    static constexpr const uint64_t FIELD_MASK = 0b11;
+    static constexpr const uint64_t FWD_ONLY_FIELD = 0xAAAAAAAAAAAAAAAAULL;
+    static constexpr const uint64_t WR_ONLY_FIELD = 0x5555555555555555ULL;
     uint64_t value;
+    static constexpr const uint32_t FIELD_WIDTH = 2;
+    static constexpr const uint32_t NOOP = 0b00;
+    static constexpr const uint32_t WRITE_ONLY = 0b01;
+    static constexpr const uint32_t FORWARD_ONLY = 0b10;
+    static constexpr const uint32_t WRITE_AND_FORWARD = 0b11;
+    static constexpr const uint32_t MAX_NUM_ENCODINGS = sizeof(uint64_t) * CHAR_BIT / FIELD_WIDTH;
 };
 
-struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
+struct alignas(sizeof(uint64_t)) LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
     LowLatencyRoutingFields routing_fields;
     uint8_t padding0[4];
 

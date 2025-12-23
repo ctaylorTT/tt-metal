@@ -273,10 +273,7 @@ struct ChannelPointersInitializer {
         using OutboundReceiverChannelPointersN =
             OutboundReceiverChannelPointers<ChannelPointersType::NumBuffersType::value>;
 
-        if constexpr (std::is_same_v<ChannelPointersType, OutboundReceiverChannelPointersN>) {
-            return;
-        }
-        else {
+        if constexpr (!std::is_same_v<ChannelPointersType, OutboundReceiverChannelPointersN>) {
             channel_pointers.init();
         }
     }
