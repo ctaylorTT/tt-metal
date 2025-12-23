@@ -224,8 +224,8 @@ struct alignas(4) ReceiverChannelPointers {
     using NumBuffersType = std::integral_constant<uint8_t, RECEIVER_NUM_BUFFERS>;
 
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;      // offset 0, size 8
-    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;     // offset 8, size 8
     ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;          // offset 16, size 8
+    ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;     // offset 8, size 8
     ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;   // offset 24, size 8
     std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;   // offset 32, size RECEIVER_NUM_BUFFERS
     // Total size: 32 + RECEIVER_NUM_BUFFERS bytes (padded to 4-byte boundary)

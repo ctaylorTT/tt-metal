@@ -1525,7 +1525,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
-    bool progress = false;
+//    bool progress = false;
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto const pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
 
@@ -1548,10 +1548,11 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 // sender channel so we don't dynamically fetch it off the packet header
                 src_ch_id = receiver_channel_pointers.get_src_chan_id();
             } else {
-                auto receiver_buffer_index = ack_counter.get_buffer_index();
+                auto const receiver_buffer_index = ack_counter.get_buffer_index();
                 tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
                     local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
-                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+                auto const packet_header_src_ch_id = packet_header->src_ch_id;
+                receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header_src_ch_id);
                 src_ch_id = receiver_channel_pointers.get_src_chan_id(receiver_buffer_index);
             }
 
@@ -1581,9 +1582,12 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         cached_routing_fields = packet_header->routing_fields;
 #endif
         if constexpr (!skip_src_ch_id_update && !ENABLE_FIRST_LEVEL_ACK) {
-            receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
+            auto const packet_header_src_ch_id = packet_header->src_ch_id;
+            receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header_src_ch_id);
         }
+#if defined(FABRIC_2D)
         uint32_t hop_cmd;
+#endif        
         bool can_send_to_all_local_chip_receivers;
         if constexpr (is_2d_fabric) {
             // read in the hop command from route buffer.
@@ -1622,7 +1626,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
                 packet_size_bytes = packet_header->get_payload_size_including_header();
             }
             did_something = true;
-            progress = true;
+//            progress = true;
             // Count RX bytes/packets (header + payload) when consuming a packet from receiver buffer
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 update_bw_counters(packet_size_bytes, local_fabric_telemetry);
@@ -1688,7 +1692,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
         // Currently unclear if it's better to loop here or not...
         bool const unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
         auto const receiver_buffer_index = completion_counter.get_buffer_index();
-        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        bool const next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
             can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(receiver_txq_id);
@@ -1706,7 +1710,8 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
             completion_counter.increment();
         }
     }
-    return progress;
+//    return progress;
+    return did_something;
 };
 
 template <
@@ -1808,9 +1813,14 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
         initialize_array<NUM_SENDER_CHANNELS, bool, false>();
 
-    PerfTelemetryRecorder inner_loop_perf_telemetry_collector = build_perf_telemetry_recorder<perf_telemetry_mode>();
-    auto local_perf_telemetry_buffer =
-        build_perf_telemetry_buffer(reinterpret_cast<uint32_t*>(perf_telemetry_buffer_addr));
+    PerfTelemetryRecorder inner_loop_perf_telemetry_collector =
+        build_perf_telemetry_recorder<perf_telemetry_mode>();
+
+    L1PerfTelemetrySingleBuffer local_perf_telemetry_buffer(nullptr);
+    if constexpr (is_sender_channel_serviced[0] && perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
+        local_perf_telemetry_buffer =
+            build_perf_telemetry_buffer(reinterpret_cast<uint32_t*>(perf_telemetry_buffer_addr));    
+    }
 
     auto receiver_channel_response_credit_senders =
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();
