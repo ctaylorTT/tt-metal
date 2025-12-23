@@ -102,8 +102,8 @@ template <uint8_t NUM_BUFFERS>
 FORCE_INLINE uint8_t distance_behind(const BufferPtr& trailing_ptr, const BufferPtr& leading_ptr) {
     static_assert(NUM_BUFFERS != 0, "distance_behind called with NUM_BUFFERS of 0; it must be greater than 0");
     constexpr bool const is_size_pow2 = is_power_of_2(NUM_BUFFERS);
-    constexpr uint8_t ptr_wrap_mask = (2 * NUM_BUFFERS) - 1;
-    constexpr uint8_t ptr_wrap_size = 2 * NUM_BUFFERS;
+    constexpr uint8_t const ptr_wrap_mask = (2 * NUM_BUFFERS) - 1;
+    constexpr uint8_t const ptr_wrap_size = 2 * NUM_BUFFERS;
     if constexpr (is_size_pow2) {
         return (leading_ptr - trailing_ptr) & ptr_wrap_mask;
     } else {
