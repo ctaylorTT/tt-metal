@@ -7,7 +7,6 @@
 #include "debug/assert.h"
 //#include "debug/dprint.h"
 //#include "debug/ring_buffer.h"
-
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
 #include "fabric/fabric_edm_packet_header.hpp"
@@ -1377,11 +1376,12 @@ FORCE_INLINE bool run_sender_channel_step_impl(
     //       when moving to stream regs to manage rd/wr ptrs
     // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
 
-    constexpr bool use_bubble_flow_control =
+    constexpr bool const use_bubble_flow_control =
         sender_channel_is_traffic_injection_channel[sender_channel_index] && enable_deadlock_avoidance;
     static_assert(
         !use_bubble_flow_control || ENABLE_FIRST_LEVEL_ACK,
-        "Bubble flow control and first level ack must be set to the same values");
+        "Bubble flow control and first level ack must be set to the same values"
+    );
 
     uint32_t const free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
     
@@ -1392,7 +1392,7 @@ FORCE_INLINE bool run_sender_channel_step_impl(
     } else {
         receiver_has_space_for_packet = outbound_to_receiver_channel_pointers_num_free_slots != 0;
     }
-    bool has_unsent_packet = free_slots < WorkerInterfaceT::num_buffers;
+    bool const has_unsent_packet = free_slots < WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
@@ -1418,7 +1418,8 @@ FORCE_INLINE bool run_sender_channel_step_impl(
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers_num_free_slots,
             remote_receiver_channel,
-            perf_telemetry_recorder);
+            perf_telemetry_recorder
+    );
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(packet_size_bytes, local_fabric_telemetry);
@@ -1959,7 +1960,7 @@ void
     wait_for_static_connection_to_ready(
         EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
         std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
-    auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t sender_channel_idx) {
+    auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t const sender_channel_idx) {
         if (!sender_ch_live_check_skip[sender_channel_idx]) {
             return;
         }
@@ -1970,7 +1971,7 @@ void
     };
     if constexpr (multi_txq_enabled) {
         array_like_for_each_constexpr<NUM_SENDER_CHANNELS>(
-            local_sender_channel_worker_interfaces, [&](auto& interface, auto idx) {
+            local_sender_channel_worker_interfaces, [&](auto& interface, auto const idx) {
                 if constexpr (is_sender_channel_serviced[idx]) {
                     establish_static_connection_from_receiver_side(interface, idx);
                 }
@@ -1980,7 +1981,7 @@ void
         // too
         array_like_for_each<NUM_SENDER_CHANNELS>(
             local_sender_channel_worker_interfaces,
-            [&](auto& interface, size_t idx) { establish_static_connection_from_receiver_side(interface, idx); });
+            [&](auto& interface, size_t const idx) { establish_static_connection_from_receiver_side(interface, idx); });
     }
 }
 
@@ -2063,8 +2064,8 @@ void
 
 // copy the sender_channel_free_slots_stream_ids (in L1) to local memory for performance.
 template <size_t NUM_SENDER_CHANNELS>
-void populate_local_sender_channel_free_slots_stream_id_ordered_map(
-    uint32_t has_downstream_edm_vc0_buffer_connection,
+FORCE_INLINE void populate_local_sender_channel_free_slots_stream_id_ordered_map(
+    uint32_t const has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_free_slots_stream_ids[i] = sender_channel_free_slots_stream_ids[i];
@@ -2073,9 +2074,9 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
 
 constexpr bool IS_TEARDOWN_MASTER() { return MY_ERISC_ID == 0; }
 
-void wait_for_other_local_erisc() {
-    constexpr uint32_t multi_erisc_sync_start_value = 0x0fed;
-    constexpr uint32_t multi_erisc_sync_step2_value = 0x1bad;
+FORCE_INLINE void wait_for_other_local_erisc() {
+    constexpr uint32_t const multi_erisc_sync_start_value = 0x0fed;
+    constexpr uint32_t const multi_erisc_sync_step2_value = 0x1bad;
     if constexpr (IS_TEARDOWN_MASTER()) {
         write_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>(multi_erisc_sync_start_value);
         while ((read_stream_scratch_register<MULTI_RISC_TEARDOWN_SYNC_STREAM_ID>() & 0x1FFF) !=
@@ -2161,12 +2162,16 @@ void initialize_state_for_txq1_active_mode_sender_side() {
 
 void kernel_main() {
     set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+    
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
+
     static_assert(
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
+        
     if constexpr (receiver_txq_id != sender_txq_id) {
-        constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
+        constexpr bool const is_erisc_that_sets_up_second_txq =
+            is_receiver_channel_serviced[0];
         if constexpr (is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
         }
@@ -2397,7 +2402,7 @@ void kernel_main() {
     // std::array<uint32_t, NUM_SENDER_CHANNELS == 1 ? 2 : NUM_SENDER_CHANNELS>
     // local_sender_channel_free_slots_stream_ids;
 
-    const auto& local_sem_for_teardown_from_downstream_edm =
+    auto const& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
                 my_sem_for_teardown_from_edm_0,
@@ -2442,6 +2447,7 @@ void kernel_main() {
                 local_sender_channel_5_connection_semaphore_addr,
                 local_sender_channel_6_connection_semaphore_addr,
                 local_sender_channel_7_connection_semaphore_addr});
+
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_connection_info_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{

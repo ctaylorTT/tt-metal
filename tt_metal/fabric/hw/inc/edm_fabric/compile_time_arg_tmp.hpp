@@ -5,6 +5,10 @@
 #pragma once
 
 #include "tt_metal/hw/inc/compile_time_args.h"
+#include <array>
+#include <cstdint>
+#include <type_traits>
+#include <utility>
 
 ////////////////////////////////////////
 //  Conditional Arg Getters
@@ -50,13 +54,17 @@ constexpr auto initialize_receiver_channel_trid_starts() -> std::array<uint8_t, 
  */
 // clang-format on
 template <size_t NUM_TO_TAKE, size_t IN_ARRAY_SIZE, typename T>
-constexpr auto take_first_n_elements(const std::array<T, IN_ARRAY_SIZE>& arr_in) -> std::array<T, NUM_TO_TAKE> {
+constexpr auto take_first_n_elements(std::array<T, IN_ARRAY_SIZE> const& arr_in) -> std::array<T, NUM_TO_TAKE> {
+    static_assert(NUM_TO_TAKE <= IN_ARRAY_SIZE, "NUM_TO_TAKE must be less than or equal to IN_ARRAY_SIZE");
+
     std::array<T, NUM_TO_TAKE> arr{};
     for (size_t i = 0; i < NUM_TO_TAKE; i++) {
         arr[i] = arr_in[i];
     }
+
     return arr;
 }
+
 
 // clang-format off
 /**

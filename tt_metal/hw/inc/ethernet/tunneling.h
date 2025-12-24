@@ -58,7 +58,7 @@ volatile uint32_t* RtosTable =
 
 namespace internal_ {
 
-FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
+FORCE_INLINE bool eth_txq_is_busy(uint32_t const q_num) {
 #ifdef ARCH_WORMHOLE
     return eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0;
 #else
@@ -70,7 +70,7 @@ FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
 }
 
 template <bool ctx_switch = true>
-FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+FORCE_INLINE void eth_send_packet(uint32_t const q_num, uint32_t const src_word_addr, uint32_t const dest_word_addr, uint32_t const num_words) {
     WATCHER_CHECK_ETH_LINK_STATUS();
     while (eth_txq_is_busy(q_num)) {
         // Note, this is overly eager... Kills perf on allgather
@@ -85,7 +85,7 @@ FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32
 }
 
 FORCE_INLINE
-void eth_send_packet_byte_addr(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_words) {
+void eth_send_packet_byte_addr(uint32_t const q_num, uint32_t const src_addr, uint32_t const dest_addr, uint32_t const num_words) {
     WATCHER_CHECK_ETH_LINK_STATUS();
     while (eth_txq_is_busy(q_num));
     volatile uint32_t* ptr = (volatile uint32_t*)(ETH_TXQ0_REGS_START + (q_num * ETH_TXQ_REGS_SIZE));
@@ -96,7 +96,7 @@ void eth_send_packet_byte_addr(uint32_t q_num, uint32_t src_addr, uint32_t dest_
 }
 
 FORCE_INLINE
-void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+void eth_send_packet_unsafe(uint32_t const q_num, uint32_t const src_word_addr, uint32_t const dest_word_addr, uint32_t const num_words) {
     WATCHER_CHECK_ETH_LINK_STATUS();
     ASSERT(!eth_txq_is_busy(q_num));
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
@@ -106,7 +106,7 @@ void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t des
 }
 
 FORCE_INLINE
-void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t dest_addr, uint32_t num_bytes) {
+void eth_send_packet_bytes_unsafe(uint32_t const q_num, uint32_t const src_addr, uint32_t const dest_addr, uint32_t const num_bytes) {
     WATCHER_CHECK_ETH_LINK_STATUS();
     ASSERT(eth_txq_reg_read(q_num, ETH_TXQ_CMD) == 0);
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_addr);
@@ -116,7 +116,7 @@ void eth_send_packet_bytes_unsafe(uint32_t q_num, uint32_t src_addr, uint32_t de
 }
 
 template <bool ctx_switch = true>
-FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
+FORCE_INLINE void eth_write_remote_reg(uint32_t const q_num, uint32_t const reg_addr, uint32_t const val) {
     WATCHER_CHECK_ETH_LINK_STATUS();
     while (eth_txq_is_busy(q_num)) {
         if constexpr (ctx_switch) {
@@ -128,7 +128,7 @@ FORCE_INLINE void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_REG);
 }
 FORCE_INLINE
-void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
+void eth_write_remote_reg_no_txq_check(uint32_t const q_num, uint32_t const reg_addr, uint32_t const val) {
     WATCHER_CHECK_ETH_LINK_STATUS();
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, reg_addr);
     eth_txq_reg_write(q_num, ETH_TXQ_REMOTE_REG_DATA, val);
@@ -148,7 +148,7 @@ void check_and_context_switch() {
 }
 
 FORCE_INLINE
-void notify_dispatch_core_done(uint64_t dispatch_addr) {
+void notify_dispatch_core_done(uint64_t const dispatch_addr) {
     //  flush both nocs because ethernet kernels could be using different nocs to try to atomically increment semaphore
     //  in dispatch core
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
