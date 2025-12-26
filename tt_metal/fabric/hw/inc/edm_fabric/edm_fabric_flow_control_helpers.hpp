@@ -168,7 +168,7 @@ private:
 // - index (1 byte) at offset 4
 // - Compiler adds 3 bytes implicit padding to reach 8-byte total
 template <uint8_t NUM_BUFFERS>
-struct alignas(4) ChannelCounter {
+struct alignas(sizeof(uint32_t)) ChannelCounter {
     uint32_t counter;     // offset 0, size 4
     BufferIndex index;    // offset 4, size 1 (+ 3 bytes implicit padding)
     // Total size: 8 bytes
@@ -204,7 +204,7 @@ struct alignas(4) ChannelCounter {
  * Optimized for Baby RISC-V: minimal 4-byte structure, naturally aligned
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
-struct alignas(4) OutboundReceiverChannelPointers {
+struct alignas(sizeof(uint32_t)) OutboundReceiverChannelPointers {
     using NumBuffersType = std::integral_constant<uint8_t, RECEIVER_NUM_BUFFERS>;
 
     uint32_t num_free_slots;  // offset 0, size 4 (total: 4 bytes)
@@ -220,7 +220,7 @@ struct alignas(4) OutboundReceiverChannelPointers {
  * - Hot-path counters are accessed more frequently than src_chan_ids lookups
  */
 template <uint8_t RECEIVER_NUM_BUFFERS>
-struct alignas(4) ReceiverChannelPointers {
+struct alignas(sizeof(uint32_t)) ReceiverChannelPointers {
     using NumBuffersType = std::integral_constant<uint8_t, RECEIVER_NUM_BUFFERS>;
 
     ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;      // offset 0, size 8

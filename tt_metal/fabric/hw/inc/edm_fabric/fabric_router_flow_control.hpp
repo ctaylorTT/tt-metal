@@ -10,7 +10,7 @@
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
-struct alignas(4) ReceiverChannelCounterBasedResponseCreditSender {
+struct alignas(sizeof(uint32_t)) ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;
     ReceiverChannelCounterBasedResponseCreditSender(size_t const receiver_channel_index) :
         completion_counters_base_ptr(
@@ -53,7 +53,7 @@ private:
     }
 };
 
-struct alignas(4) ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
+struct alignas(sizeof(uint32_t)) ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender() {
         for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS; i++) {
             sender_channel_packets_completed_stream_ids[i] = to_sender_packets_completed_streams[i];
@@ -116,7 +116,7 @@ constexpr FORCE_INLINE auto init_receiver_channel_response_credit_senders()
     return init_receiver_channel_response_credit_senders_impl<ReceiverChannelResponseCreditSender>::template init<
         NUM_RECEIVER_CHANNELS>();
 }
-struct alignas(4) SenderChannelFromReceiverCounterBasedCreditsReceiver {
+struct alignas(sizeof(uint32_t)) SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
     SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t const sender_channel_index) :
         acks_received_counter_ptr(
@@ -153,7 +153,7 @@ struct alignas(4) SenderChannelFromReceiverCounterBasedCreditsReceiver {
     uint32_t completions_received_and_processed = 0;
 };
 
-struct alignas(4) SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
+struct alignas(sizeof(uint32_t)) SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver {
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver() = default;
     SenderChannelFromReceiverStreamRegisterFreeSlotsBasedCreditsReceiver(size_t const sender_channel_index) :
         to_sender_packets_acked_stream(to_sender_packets_acked_streams[sender_channel_index]),
