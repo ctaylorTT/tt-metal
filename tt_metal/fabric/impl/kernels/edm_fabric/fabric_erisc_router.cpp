@@ -2158,12 +2158,6 @@ void initialize_state_for_txq1_active_mode_sender_side() {
     }
 }
 
-// runs prior to kernel_main
-//
-__attribute__((constructor)) void kernel_main_ini() {
-        set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-}
-
 #if defined(FABRIC_2D)
     #define DOWNSTREAM_EDM_VC0_WORKER_REGISTRATION_ID 0U
     #define DOWNSTREAM_EDM_VC0_WORKER_LOCATION_INFO_ADDRESSES 1U
@@ -2208,6 +2202,12 @@ using local_tensix_relay_cond_t = std::conditional_t<
     local_tensix_relay_impl_type,
     local_tensix_relay_empty_type
 >;
+
+// runs prior to kernel_main
+//
+__attribute__((constructor)) void kernel_main_ini() {
+    set_l1_data_cache<ENABLE_RISC_CPU_DATA_CACHE>();        
+}
 
 void kernel_main() {
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
@@ -2388,7 +2388,7 @@ void kernel_main() {
     if constexpr (is_sender_channel_serviced[0]) {
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 0;
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
-        *reinterpret_cast<volatile uint32_t*>(sender0_worker_semaphore_ptr) = 0;
+        *reinterpret_cast<volatile uint32_t*>(sender0_worker_semaphore_ptr) = 0; // note for the other accesses -> (arg_idx+1U)
     }
     if constexpr (is_sender_channel_serviced[1]) {
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_1_connection_semaphore_addr) = 0;
@@ -2450,7 +2450,7 @@ void kernel_main() {
     // SFINAE-friendly type selection; `if constexpr` removes the deadcode
     // when `udm_mode` is false but the type must still be valid when the
     // constexpr and templated type is instantiated. using the inverted value
-    // creates a valid but unused type in the non-UDM mode case (disabled).
+    // creates a *valid*, but ultimately, *unused* type in the non-UDM mode case (disabled).
     //
     using udm_mode_type =
         std::integral_constant<bool, !udm_mode>;

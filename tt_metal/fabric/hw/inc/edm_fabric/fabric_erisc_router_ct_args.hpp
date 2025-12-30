@@ -294,17 +294,17 @@ constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_servic
     fill_array_with_next_n_args<bool, receiver_channel_serviced_args_idx, MAX_NUM_RECEIVER_CHANNELS>();
 constexpr size_t const MAIN_CT_ARGS_IDX_5 = receiver_channel_serviced_args_idx + is_receiver_channel_serviced.size();
 
-constexpr bool enable_ethernet_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5) != 0;
-constexpr bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 1) != 0;
-constexpr bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 2) != 0;
-constexpr size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 3);
-constexpr size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 4);
-constexpr bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
+constexpr const bool enable_ethernet_handshake = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5) != 0;
+constexpr const bool enable_context_switch = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 1) != 0;
+constexpr const bool enable_interrupts = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 2) != 0;
+static constexpr const size_t sender_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 3);
+static constexpr const size_t receiver_txq_id = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 4);
+static constexpr const bool multi_txq_enabled = sender_txq_id != receiver_txq_id;
 
-constexpr size_t iterations_between_ctx_switch_and_teardown_checks = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 5);
-constexpr size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 6);
-constexpr size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 7);
-constexpr size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 8);
+constexpr const size_t iterations_between_ctx_switch_and_teardown_checks = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 5);
+constexpr const size_t is_2d_fabric = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 6);
+constexpr const size_t my_direction = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 7);
+constexpr const size_t num_eth_ports = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 8);
 
 // If true, the sender channel will spin inside send_next_data until the eth_txq is not busy, rather than checking
 // eth_txq_is_busy() being false as a prerequisite for sending the next packet
