@@ -2177,6 +2177,38 @@ __attribute__((constructor)) void kernel_main_ini() {
     alignas(sizeof(uint32_t)) static uint32_t downstream_edm_vc0_worker[NUM_DOWNSTREAM_SENDERS_VC0][DOWNSTREAM_EDM_VC0_NUM_FIELDS];
 #endif
 
+struct local_tensix_relay_empty_type {
+};
+
+struct alignas(sizeof(uint32_t)) local_tensix_relay_impl_type {
+    uint32_t buffer_base_address;
+    uint32_t noc_x;
+    uint32_t noc_y;
+    uint32_t worker_registration_id;
+    uint32_t worker_location_info_address;
+    uint32_t free_slots_stream_id;
+    uint32_t connection_buffer_index_id;
+    // unused padding to make size multiple of 8 bytes
+    uint32_t padding;
+
+    local_tensix_relay_impl_type() :
+        buffer_base_address(0),
+        noc_x(0),
+        noc_y(0),
+        worker_registration_id(0),
+        worker_location_info_address(0),
+        free_slots_stream_id(0),
+        connection_buffer_index_id(0),
+        padding(0) {}
+};
+
+template<bool UMD_MODE>
+using local_tensix_relay_cond_t = std::conditional_t<
+    UMD_MODE,
+    local_tensix_relay_impl_type,
+    local_tensix_relay_empty_type
+>;
+
 void kernel_main() {
     eth_txq_reg_write(sender_txq_id, ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD, DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD);
 
@@ -2346,7 +2378,13 @@ void kernel_main() {
     
     const size_t local_sender_channel_0_connection_buffer_index_addr =
         local_sender_channel_0_connection_buffer_index_id;
+
     //  initialize the statically allocated "semaphores"
+    //  loading the address into a volatile pointer and using the pointer
+    //  to set the value to 0 peroforms significantly faster on erisc harts
+    //  this particular pattern is on display in other parts of this file;
+    //  leave alone unless otherwise necessary.
+    //
     if constexpr (is_sender_channel_serviced[0]) {
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_semaphore_addr) = 0;
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 0;
@@ -2396,6 +2434,11 @@ void kernel_main() {
             *reinterpret_cast<volatile uint32_t*>(sem) = 0;
         }
     }
+
+    // skip the 8 previous arguments previously
+    // these pointers were stored into the following
+    // local variables: sender(0-7)_worker_semaphore_ptr
+    //
     arg_idx += 8U;
 
     ///////////////////////////////////////////////
@@ -2403,22 +2446,29 @@ void kernel_main() {
     // UDM mode only - packed at end of runtime args
     ///////////////////////////////////////////////
     const auto has_local_tensix_relay_connection = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t local_tensix_relay_buffer_base_address = 0;
-    uint32_t local_tensix_relay_noc_x = 0;
-    uint32_t local_tensix_relay_noc_y = 0;
-    uint32_t local_tensix_relay_worker_registration_id = 0;
-    uint32_t local_tensix_relay_worker_location_info_address = 0;
-    uint32_t local_tensix_relay_free_slots_stream_id = 0;
-    uint32_t local_tensix_relay_connection_buffer_index_id = 0;
+
+    // SFINAE-friendly type selection; `if constexpr` removes the deadcode
+    // when `udm_mode` is false but the type must still be valid when the
+    // constexpr and templated type is instantiated. using the inverted value
+    // creates a valid but unused type in the non-UDM mode case (disabled).
+    //
+    using udm_mode_type =
+        std::integral_constant<bool, !udm_mode>;
+
+    using local_tensix_relay_type =
+        local_tensix_relay_cond_t< udm_mode_type::value >;
+
+    local_tensix_relay_type local_tensix_relay{};
+
     if constexpr (udm_mode) {
         if (has_local_tensix_relay_connection) {
-            local_tensix_relay_buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
-            local_tensix_relay_noc_x = get_arg_val<uint32_t>(arg_idx++);
-            local_tensix_relay_noc_y = get_arg_val<uint32_t>(arg_idx++);
-            local_tensix_relay_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
-            local_tensix_relay_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
-            local_tensix_relay_free_slots_stream_id = get_arg_val<uint32_t>(arg_idx++);
-            local_tensix_relay_connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
+            local_tensix_relay.buffer_base_address = get_arg_val<uint32_t>(arg_idx++);
+            local_tensix_relay.noc_x = get_arg_val<uint32_t>(arg_idx++);
+            local_tensix_relay.noc_y = get_arg_val<uint32_t>(arg_idx++);
+            local_tensix_relay.worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
+            local_tensix_relay.worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
+            local_tensix_relay.free_slots_stream_id = get_arg_val<uint32_t>(arg_idx++);
+            local_tensix_relay.connection_buffer_index_id = get_arg_val<uint32_t>(arg_idx++);
         }
     }
 
@@ -2508,6 +2558,7 @@ void kernel_main() {
         uint32_t shift_val = 0;
         while (has_downstream_edm) {
             if (has_downstream_edm & 0x1) {
+
 #if defined(FABRIC_2D)
                 auto & downstream_edm_vc0_worker_ci = downstream_edm_vc0_worker[compact_index];
 #endif
@@ -2520,7 +2571,8 @@ void kernel_main() {
 #else
 #define VC_0_FEE_SLOT_STREAM_INDEX (0U)
 #endif
-                auto receiver_channel_free_slots_stream_id = StreamId{vc_0_free_slots_stream_ids[VC_0_FEE_SLOT_STREAM_INDEX]};
+                auto const receiver_channel_free_slots_stream_id =
+                    StreamId{vc_0_free_slots_stream_ids[VC_0_FEE_SLOT_STREAM_INDEX]};
 
                 // (x << 3) == (x * 8)
                 //
@@ -2605,20 +2657,20 @@ void kernel_main() {
 
             new (&local_relay_interface) RouterToRouterSender<LOCAL_RELAY_NUM_BUFFERS>(
                 true,  // persistent_mode - relay is always a persistent connection
-                local_tensix_relay_noc_x,
-                local_tensix_relay_noc_y,
-                local_tensix_relay_buffer_base_address,
+                local_tensix_relay.noc_x,
+                local_tensix_relay.noc_y,
+                local_tensix_relay.buffer_base_address,
                 LOCAL_RELAY_NUM_BUFFERS,  // Use compile-time constant
-                local_tensix_relay_worker_registration_id,
-                local_tensix_relay_worker_location_info_address,
+                local_tensix_relay.worker_registration_id,
+                local_tensix_relay.worker_location_info_address,
                 channel_buffer_size,
-                local_tensix_relay_connection_buffer_index_id,  // From runtime args - dedicated L1 location for relay
+                local_tensix_relay.connection_buffer_index_id,  // From runtime args - dedicated L1 location for relay
                                                                 // connection
                 0,        // worker read counter address - unused for Router->Relay (uses stream registers)
                 nullptr,  // teardown semaphore - router never calls close on relay
                 0,        // buffer_index_local_addr - scratch space for noc reads
                 // Remote stream: relay's free slots stream (what relay publishes) - from runtime args
-                StreamId{local_tensix_relay_free_slots_stream_id},
+                StreamId{local_tensix_relay.free_slots_stream_id},
                 // Local stream: our copy of relay's free slots - dedicated stream ID for relay
                 StreamId{tensix_relay_local_free_slots_stream_id},
                 receiver_channel_forwarding_data_cmd_buf_ids[0],

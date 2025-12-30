@@ -158,7 +158,7 @@ constexpr size_t remote_worker_sender_channel =
     conditional_get_compile_time_arg<skip_src_ch_id_update, REMOTE_CHANNEL_INFO_START_IDX>();
 
 constexpr size_t const UDM_MODE_IDX = REMOTE_CHANNEL_INFO_START_IDX + (skip_src_ch_id_update ? 1 : 0);
-constexpr bool udm_mode = get_compile_time_arg_val(UDM_MODE_IDX) != 0;
+static constexpr bool const udm_mode = get_compile_time_arg_val(UDM_MODE_IDX) != 0;
 
 constexpr size_t const LOCAL_TENSIX_RELAY_INFO_START_IDX = UDM_MODE_IDX + 1;
 constexpr uint32_t const LOCAL_RELAY_NUM_BUFFERS =
