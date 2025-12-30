@@ -34,8 +34,8 @@ struct ChannelTraits;
  */
 template <uint8_t NUM_BUFFERS>
 struct ChannelTraits<RouterStaticSizedChannelWriterAdapter<NUM_BUFFERS>> {
-    static constexpr uint8_t num_buffers = NUM_BUFFERS;
-    static constexpr bool is_elastic = false;
+    static constexpr const uint8_t num_buffers = NUM_BUFFERS;
+    static constexpr const bool is_elastic = false;
     using channel_type = RouterStaticSizedChannelWriterAdapter<NUM_BUFFERS>;
 };
 
@@ -44,8 +44,8 @@ struct ChannelTraits<RouterStaticSizedChannelWriterAdapter<NUM_BUFFERS>> {
  */
 template <uint8_t SLOTS_PER_CHUNK, uint16_t CHUNK_SIZE_BYTES>
 struct ChannelTraits<RouterElasticChannelWriterAdapter<SLOTS_PER_CHUNK, CHUNK_SIZE_BYTES>> {
-    static constexpr uint8_t num_buffers = SLOTS_PER_CHUNK;
-    static constexpr bool is_elastic = true;
+    static constexpr const uint8_t num_buffers = SLOTS_PER_CHUNK;
+    static constexpr const bool is_elastic = true;
     using channel_type = RouterElasticChannelWriterAdapter<SLOTS_PER_CHUNK, CHUNK_SIZE_BYTES>;
 };
 

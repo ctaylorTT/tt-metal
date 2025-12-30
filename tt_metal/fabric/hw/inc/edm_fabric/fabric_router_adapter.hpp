@@ -43,8 +43,8 @@ namespace tt::tt_fabric {
  * The consumer when issuing an acknowledgement, will increment the producer's free slots counter.
  */
 template <uint8_t EDM_NUM_BUFFER_SLOTS>
-struct RouterStaticSizedChannelWriterAdapter {
-    static constexpr bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
+struct alignas(sizeof(uint32_t)) RouterStaticSizedChannelWriterAdapter {
+    static constexpr const bool ENABLE_STATEFUL_WRITE_CREDIT_TO_DOWNSTREAM_EDM =
 #if !defined(DEBUG_PRINT_ENABLED) and !defined(WATCHER_ENABLED)
         true;
 #else
@@ -53,8 +53,8 @@ struct RouterStaticSizedChannelWriterAdapter {
     // Temporary flag to distinguish between worker and EDM users of this adapter until we split it into
     // two separate adapters (they've started diverging quite a bit by now)
     //  --> Not splitting yet though to avoid change conflict issues with some other in flight changes
-    static constexpr bool IS_POW2_NUM_BUFFERS = is_power_of_2(EDM_NUM_BUFFER_SLOTS);
-    static constexpr size_t BUFFER_SLOT_PTR_WRAP = EDM_NUM_BUFFER_SLOTS * 2;
+    static constexpr const bool IS_POW2_NUM_BUFFERS = is_power_of_2(EDM_NUM_BUFFER_SLOTS);
+    static constexpr const size_t BUFFER_SLOT_PTR_WRAP = EDM_NUM_BUFFER_SLOTS * 2;
 
     // HACK: Need a way to properly set this up
 
@@ -117,22 +117,22 @@ struct RouterStaticSizedChannelWriterAdapter {
 
     template <ProgrammableCoreType my_core_type = ProgrammableCoreType::ACTIVE_ETH>
     FORCE_INLINE RouterStaticSizedChannelWriterAdapter(
-        bool connected_to_persistent_fabric,
-        uint8_t edm_worker_x,
-        uint8_t edm_worker_y,
-        std::size_t edm_buffer_base_addr,
-        uint8_t num_buffers_per_channel,
-        std::size_t edm_connection_handshake_l1_id,
-        std::size_t edm_worker_location_info_addr,  // The EDM's location for `EDMChannelWorkerLocationInfo`
-        uint16_t buffer_size_bytes,
-        size_t edm_buffer_index_id,
+        bool const connected_to_persistent_fabric,
+        uint8_t const edm_worker_x,
+        uint8_t const edm_worker_y,
+        std::size_t const edm_buffer_base_addr,
+        uint8_t const num_buffers_per_channel,
+        std::size_t const edm_connection_handshake_l1_id,
+        std::size_t const edm_worker_location_info_addr,  // The EDM's location for `EDMChannelWorkerLocationInfo`
+        uint16_t const buffer_size_bytes,
+        size_t const edm_buffer_index_id,
         volatile uint32_t* const from_remote_buffer_free_slots_ptr,
         volatile uint32_t* const worker_teardown_addr,
-        uint32_t local_buffer_index_addr,
-        uint32_t sender_channel_credits_stream_id,
-        StreamId worker_credits_stream_id,
-        uint8_t data_noc_cmd_buf = write_reg_cmd_buf,
-        uint8_t sync_noc_cmd_buf = write_at_cmd_buf) {
+        uint32_t const local_buffer_index_addr,
+        uint32_t const sender_channel_credits_stream_id,
+        StreamId const worker_credits_stream_id,
+        uint8_t const data_noc_cmd_buf = write_reg_cmd_buf,
+        uint8_t const sync_noc_cmd_buf = write_at_cmd_buf) {
         this->init<my_core_type>(
             connected_to_persistent_fabric,
             edm_worker_x,
@@ -152,7 +152,7 @@ struct RouterStaticSizedChannelWriterAdapter {
             sync_noc_cmd_buf);
     }
 
-    static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
+    static constexpr const size_t edm_sender_channel_field_stride_bytes = 16;
 
 public:
     template <uint8_t EDM_TO_DOWNSTREAM_NOC = noc_index, uint8_t EDM_TO_DOWNSTREAM_NOC_VC = NOC_UNICAST_WRITE_VC>

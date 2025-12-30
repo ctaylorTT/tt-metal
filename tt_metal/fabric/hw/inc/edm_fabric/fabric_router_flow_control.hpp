@@ -16,12 +16,8 @@ struct alignas(sizeof(uint32_t)) ReceiverChannelCounterBasedResponseCreditSender
         completion_counters_base_ptr(
             reinterpret_cast<volatile uint32_t*>(local_receiver_completion_counters_base_address)),
         ack_counters_base_ptr(reinterpret_cast<volatile uint32_t*>(local_receiver_ack_counters_base_address)),
-        completion_counters({}),
-        ack_counters({}) {
-        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-            completion_counters[i] = 0;
-            ack_counters[i] = 0;
-        }
+        completion_counters({0}),
+        ack_counters({0}) {
     }
 
     FORCE_INLINE void send_completion_credit(uint8_t const src_id) {

@@ -1531,6 +1531,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender,
     const tt::tt_fabric::routing_l1_info_t& routing_table,
     LocalTelemetryT& local_fabric_telemetry) {
+
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     auto const pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
 
@@ -1572,7 +1573,7 @@ FORCE_INLINE bool run_receiver_channel_step_impl(
     }
 
     // Code profiling timer for receiver channel forward
-    NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
+    alignas(sizeof(uint32_t)) NamedProfiler<CodeProfilingTimerType::RECEIVER_CHANNEL_FORWARD, code_profiling_enabled_timers_bitfield, code_profiling_buffer_base_addr> receiver_forward_timer;
     receiver_forward_timer.set_should_dump(unwritten_packets);
     receiver_forward_timer.open();
 
@@ -2063,7 +2064,6 @@ void
 // copy the sender_channel_free_slots_stream_ids (in L1) to local memory for performance.
 template <size_t NUM_SENDER_CHANNELS>
 FORCE_INLINE void populate_local_sender_channel_free_slots_stream_id_ordered_map(
-    uint32_t const has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
     for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
         local_sender_channel_free_slots_stream_ids[i] = sender_channel_free_slots_stream_ids[i];
@@ -2202,6 +2202,16 @@ using local_tensix_relay_cond_t = std::conditional_t<
     local_tensix_relay_impl_type,
     local_tensix_relay_empty_type
 >;
+
+struct RouterToRouterSenderEmpty {};
+
+template<bool UMD_MODE>
+using RouterToRouterSender_t = std::conditional_t<
+    UMD_MODE,
+    RouterToRouterSender<LOCAL_RELAY_NUM_BUFFERS>,
+    RouterToRouterSenderEmpty
+>;
+
 
 // runs prior to kernel_main
 //
@@ -2540,15 +2550,15 @@ void kernel_main() {
         connection_worker_info_ptr->edm_read_counter = 0;
     }
     // create the sender channel worker interfaces with input array of number of buffers
-    auto local_sender_channel_worker_interfaces =
+    alignas(sizeof(uint32_t)) auto local_sender_channel_worker_interfaces =
         tt::tt_fabric::EdmChannelWorkerInterfaces<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
     // TODO: change to TMP.
-    alignas(sizeof(size_t)) std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_DOWNSTREAM_SENDERS_VC0>
+    alignas(sizeof(uint32_t)) std::array<RouterToRouterSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_DOWNSTREAM_SENDERS_VC0>
         downstream_edm_noc_interfaces_vc0;
     populate_local_sender_channel_free_slots_stream_id_ordered_map(
-        has_downstream_edm_vc0_buffer_connection, local_sender_channel_free_slots_stream_ids);
+        local_sender_channel_free_slots_stream_ids);
 
     if (has_downstream_edm_vc0_buffer_connection) {
         // Only bit 0 is set for 1D
@@ -2558,7 +2568,6 @@ void kernel_main() {
         uint32_t shift_val = 0;
         while (has_downstream_edm) {
             if (has_downstream_edm & 0x1) {
-
 #if defined(FABRIC_2D)
                 auto & downstream_edm_vc0_worker_ci = downstream_edm_vc0_worker[compact_index];
 #endif
@@ -2649,13 +2658,18 @@ void kernel_main() {
     // Relay handles forwarding packets to local chip workers
     // Uses dedicated stream IDs and L1 locations to avoid assumptions about direction indexing
     // LOCAL_RELAY_NUM_BUFFERS comes from compile-time args (propagated from relay config)
-    RouterToRouterSender<LOCAL_RELAY_NUM_BUFFERS> local_relay_interface;
+
+    using RouterRouterToRouterSenderRelayType =
+        RouterToRouterSender_t< udm_mode_type::value >;
+
+    RouterRouterToRouterSenderRelayType local_relay_interface;
+
     if constexpr (udm_mode) {
         if (has_local_tensix_relay_connection) {
             // Reuse RouterToRouterSender for relay connection
             // Relay is just another sender interface, but pointing to local tensix instead of remote router
 
-            new (&local_relay_interface) RouterToRouterSender<LOCAL_RELAY_NUM_BUFFERS>(
+            new (&local_relay_interface) RouterRouterToRouterSenderRelayType(
                 true,  // persistent_mode - relay is always a persistent connection
                 local_tensix_relay.noc_x,
                 local_tensix_relay.noc_y,
@@ -2763,7 +2777,7 @@ void kernel_main() {
                 wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_local_sync_ptr, num_local_edms - 1);
                 // This master sends notification to self for multi risc in single eth core case,
                 // This still send to self even though with single risc core case, but no side effects
-                constexpr uint32_t exclude_eth_chan = std::numeric_limits<uint32_t>::max();
+                constexpr uint32_t const exclude_eth_chan = std::numeric_limits<uint32_t>::max();
                 notify_subordinate_routers(
                     edm_channels_mask, exclude_eth_chan, (uint32_t)edm_local_sync_ptr, num_local_edms);
             } else {

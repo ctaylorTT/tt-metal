@@ -10,7 +10,7 @@ namespace tt::tt_fabric {
 
 enum class Topology { NeighborExchange = 0, Linear = 1, Ring = 2, Mesh = 3, Torus = 4 };
 
-struct WorkerXY {
+struct alignas(sizeof(uint32_t)) WorkerXY {
     uint16_t x;
     uint16_t y;
 
@@ -25,7 +25,7 @@ struct WorkerXY {
     constexpr bool operator!=(const WorkerXY& rhs) const { return !(*this == rhs); }
 };
 
-struct coord_t {
+struct alignas(sizeof(uint32_t)) coord_t {
     coord_t(uint32_t x, uint32_t y) : x(x), y(y) {}
     uint32_t x;
     uint32_t y;
@@ -58,7 +58,7 @@ enum SendStatus : uint8_t {
     ERROR,
 };
 
-struct EDMChannelWorkerLocationInfo {
+struct alignas(sizeof(uint32_t)) EDMChannelWorkerLocationInfo {
     uint32_t worker_semaphore_address{};
     uint32_t align_pad_0{};  // Padding added for safe reading over noc
     uint32_t align_pad_1{};
@@ -78,6 +78,24 @@ struct EDMChannelWorkerLocationInfo {
     uint32_t align_pad_9{};  // Padding added for safe reading over noc
     uint32_t align_pad_10{};
     uint32_t align_pad_11{};
+
+    EDMChannelWorkerLocationInfo() :
+        worker_semaphore_address(0),
+        align_pad_0(0),
+        align_pad_1(0),
+        align_pad_2(0),
+        worker_teardown_semaphore_address(0),
+        align_pad_3(0),
+        align_pad_4(0),
+        align_pad_5(0),
+        worker_xy(0, 0),
+        align_pad_6(0),
+        align_pad_7(0),
+        align_pad_8(0),
+        edm_read_counter(0),
+        align_pad_9(0),
+        align_pad_10(0),
+        align_pad_11(0) {}
 };
 
 static_assert(sizeof(EDMChannelWorkerLocationInfo) <= 64);

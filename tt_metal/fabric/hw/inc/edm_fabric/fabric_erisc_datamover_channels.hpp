@@ -725,7 +725,6 @@ struct EdmChannelWorkerInterface {
         return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
     }
 
-
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
     uint64_t cached_worker_semaphore_address = 0;
     volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
