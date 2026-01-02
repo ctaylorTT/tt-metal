@@ -3044,8 +3044,15 @@ void kernel_main() {
             // 2. All risc cores in master eth core receive signal from host and exits from this wait
             //    Other subordinate risc cores wait for this signal
             // 4. The other subordinate risc cores receive the READY_FOR_TRAFFIC signal and exit from this wait
-            wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>((uint32_t)edm_status_ptr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
-
+            {
+                union {
+                    volatile tt::tt_fabric::EDMStatus* volatile ptr;
+                    uint32_t addr;
+                } edm_status_ptr_cast;
+                edm_status_ptr_cast.ptr = edm_status_ptr;
+                wait_for_notification<ENABLE_RISC_CPU_DATA_CACHE>(edm_status_ptr_cast.addr, tt::tt_fabric::EDMStatus::READY_FOR_TRAFFIC);
+            }
+            
             if constexpr (is_local_handshake_master) {
                 // 3. Only master risc core notifies all subordinate risc cores (except subordinate riscs in master eth
                 // core)
