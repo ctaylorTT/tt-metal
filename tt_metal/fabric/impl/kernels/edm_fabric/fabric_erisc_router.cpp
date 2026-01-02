@@ -559,7 +559,13 @@ FORCE_INLINE void send_next_data(
 
     uint32_t const src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
-    volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
+    union {
+        volatile PACKET_HEADER_TYPE* pkt_header;
+        uintptr_t addr;
+    } src_addr_cast;
+    src_addr_cast.addr = src_addr;
+
+    volatile PACKET_HEADER_TYPE* pkt_header = src_addr_cast.pkt_header;
     size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
     
     auto const dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
@@ -1898,10 +1904,22 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     size_t did_nothing_count = 0;
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
-    auto fabric_telemetry = reinterpret_cast<volatile FabricTelemetryT*>(MEM_AERISC_FABRIC_TELEMETRY_BASE);
+
+    union {
+        volatile FabricTelemetryT* dst;
+        decltype(MEM_AERISC_FABRIC_TELEMETRY_BASE) src;
+    } fabric_telemetry_cast;
+    fabric_telemetry_cast.src = MEM_AERISC_FABRIC_TELEMETRY_BASE;
+    auto fabric_telemetry = fabric_telemetry_cast.dst;
+    
     *termination_signal_ptr = tt::tt_fabric::TerminationSignal::KEEP_RUNNING;
 
-    const auto* routing_table_l1 = reinterpret_cast<tt_l1_ptr tt::tt_fabric::routing_l1_info_t*>(ROUTING_TABLE_BASE);
+    union {
+        tt_l1_ptr tt::tt_fabric::routing_l1_info_t* dst;
+        decltype(ROUTING_TABLE_BASE) src;
+    } routing_table_l1_cast;
+    routing_table_l1_cast.src = ROUTING_TABLE_BASE;
+    const auto* routing_table_l1 = routing_table_l1_cast.dst;
     tt::tt_fabric::routing_l1_info_t routing_table = *routing_table_l1;
 
     // May want to promote to part of the handshake but for now we just initialize in this standalone way
