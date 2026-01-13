@@ -515,28 +515,6 @@ FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET
 #endif
 }
 
-FORCE_INLINE bool check_send_next_data_passthrough_impl(
-    uint32_t const sender_channel_free_slots_stream_id,
-    ReceiverPointersT const& outbound_to_receiver_channel_pointers
-) {
-    uint32_t const free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
-
-    bool receiver_has_space_for_packet;
-    if constexpr (use_bubble_flow_control) {
-        receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.num_free_slots >=
-                                        BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS;
-    } else {
-        receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    }
-
-//    uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
-//    bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
-
-    return (0U < free_slots) &&
-        receiver_has_space_for_packet &&
-        !internal_::eth_txq_is_busy(sender_txq_id);
-}
-
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -544,12 +522,14 @@ template <
     typename SenderChannelT,
     typename WorkerInterfaceT,
     typename ReceiverPointersT,
-    typename ReceiverChannelT>
+    typename ReceiverChannelT,
+    typename LocalTelemetryT>
 FORCE_INLINE void send_next_data_passthrough(
     SenderChannelT& sender_buffer_channel,
     WorkerInterfaceT& sender_worker_interface,
     ReceiverPointersT& outbound_to_receiver_channel_pointers,
-    ReceiverChannelT& receiver_buffer_channel) {
+    ReceiverChannelT& receiver_buffer_channel,
+    LocalTelemetryT& local_fabric_telemetry) {
 
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
@@ -578,152 +558,8 @@ FORCE_INLINE void send_next_data_passthrough(
     sender_buffer_channel.advance_to_next_cached_buffer_slot_addr();
     remote_receiver_num_free_slots--;
 
+    record_packet_send(local_fabric_telemetry, sender_channel_index, payload_size_bytes);
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
-}
-
-template <
-    uint8_t sender_channel_index,
-    uint8_t to_receiver_pkts_sent_id,
-    bool SKIP_CONNECTION_LIVENESS_CHECK,
-    bool enable_first_level_ack,
-    typename SenderChannelT,
-    typename WorkerInterfaceT,
-    typename ReceiverPointersT,
-    typename ReceiverChannelT,
-    typename LocalTelemetryT>
-#if !defined(FABRIC_2D_VC1_ACTIVE)
-FORCE_INLINE
-#endif
-    bool
-    run_sender_channel_passthrough_step_impl(
-        SenderChannelT& local_sender_channel,
-        WorkerInterfaceT& local_sender_channel_worker_interface,
-        ReceiverPointersT& outbound_to_receiver_channel_pointers,
-        ReceiverChannelT& remote_receiver_channel,
-        bool& channel_connection_established,
-        uint32_t const sender_channel_free_slots_stream_id,
-        SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits) {
-    bool progress = false;
-    // If the receiver has space, and we have one or more packets unsent from producer, then send one
-    // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
-    //       when moving to stream regs to manage rd/wr ptrs
-    // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
-
-    constexpr bool use_bubble_flow_control =
-        sender_channel_is_traffic_injection_channel[sender_channel_index] && enable_deadlock_avoidance;
-    static_assert(
-        !use_bubble_flow_control || enable_first_level_ack,
-        "Bubble flow control and first level ack must be set to the same values");
-
-    bool receiver_has_space_for_packet;
-    if constexpr (use_bubble_flow_control) {
-        receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.num_free_slots >=
-                                        BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS;
-    } else {
-        receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    }
-
-    auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-        local_sender_channel.get_cached_next_buffer_slot_addr());
-    if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
-        update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
-    }
-    send_next_data_passthrough<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
-        local_sender_channel,
-        local_sender_channel_worker_interface,
-        outbound_to_receiver_channel_pointers,
-        remote_receiver_channel);
-
-    // Update local TX counters: split responsibility in multi-ERISC mode
-    if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-        update_bw_counters(pkt_header); //, local_fabric_telemetry);
-    }
-    increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
-
-    // Process COMPLETIONs from receiver
-    int32_t const completions_since_last_check =
-        sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
-
-    if (completions_since_last_check) {
-        outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
-        sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
-
-        // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
-        // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
-        // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
-        if constexpr (!enable_first_level_ack) {
-            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
-                local_sender_channel_worker_interface, completions_since_last_check, channel_connection_established);
-        }
-    }
-
-    // Process ACKs from receiver
-    // ACKs are processed second to avoid any sort of races. If we process acks second,
-    // we are guaranteed to see equal to or greater the number of acks than completions
-    if constexpr (enable_first_level_ack) {
-        auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
-        if (acks_since_last_check > 0) {
-            sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
-            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
-                local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
-        }
-    }
-
-    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
-        auto check_connection_status =
-            !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
-        if (check_connection_status) {
-            check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
-                local_sender_channel_worker_interface,
-                channel_connection_established,
-                sender_channel_free_slots_stream_id);
-        }
-    }
-    
-    return true;
-};
-
-template <
-    uint8_t VC_RECEIVER_CHANNEL,
-    uint8_t sender_channel_index,
-    bool enable_first_level_ack,
-    typename EthSenderChannels,
-    typename EdmChannelWorkerIFs,
-    typename RemoteEthReceiverChannels,
-    typename ReceiverPointersT,
-    size_t NUM_SENDER_CHANNELS,
-    typename LocalTelemetryT>
-#if !defined(FABRIC_2D_VC1_ACTIVE)
-FORCE_INLINE
-#endif
-    bool
-    run_sender_channel_passthrough_step(
-        EthSenderChannels& local_sender_channels,
-        EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
-        ReceiverPointersT& outbound_to_receiver_channel_pointers,
-        RemoteEthReceiverChannels& remote_receiver_channels,
-        std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established,
-        std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
-        std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits) {
-    if constexpr (is_sender_channel_serviced[sender_channel_index]) {
-        // the cache is invalidated here because the channel will read some
-        // L1 locations to see if it can make progress
-        router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-
-        return run_sender_channel_passthrough_step_impl<
-            sender_channel_index,
-            to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
-            sender_ch_live_check_skip[sender_channel_index],
-            enable_first_level_ack>(
-            local_sender_channels.template get<sender_channel_index>(),
-            local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
-            outbound_to_receiver_channel_pointers,
-            remote_receiver_channels.template get<VC_RECEIVER_CHANNEL>(),
-            channel_connection_established[sender_channel_index],
-            local_sender_channel_free_slots_stream_ids[sender_channel_index],
-            sender_channel_from_receiver_credits[sender_channel_index]);
-    }
-    return false;
 }
 
 template <
@@ -1597,6 +1433,101 @@ FORCE_INLINE void update_bw_cycles(
     }
 }
 
+/*
+ * pass through sender channel step implementation
+ */
+ template <
+    uint8_t sender_channel_index,
+    uint8_t to_receiver_pkts_sent_id,
+    bool SKIP_CONNECTION_LIVENESS_CHECK,
+    bool enable_first_level_ack,
+    typename SenderChannelT,
+    typename WorkerInterfaceT,
+    typename ReceiverPointersT,
+    typename ReceiverChannelT,
+    typename LocalTelemetryT>
+#if !defined(FABRIC_2D_VC1_ACTIVE)
+FORCE_INLINE
+#endif
+    void
+    run_sender_channel_passthrough_step_impl(
+        SenderChannelT& local_sender_channel,
+        WorkerInterfaceT& local_sender_channel_worker_interface,
+        ReceiverPointersT& outbound_to_receiver_channel_pointers,
+        ReceiverChannelT& remote_receiver_channel,
+        bool& channel_connection_established,
+        uint32_t const sender_channel_free_slots_stream_id,
+        SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits,
+        LocalTelemetryT& local_fabric_telemetry) {
+
+    did_something = true;
+    //bool progress = false;
+    // If the receiver has space, and we have one or more packets unsent from producer, then send one
+    // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
+    //       when moving to stream regs to manage rd/wr ptrs
+    // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
+
+    auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
+        local_sender_channel.get_cached_next_buffer_slot_addr());
+    if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
+        update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
+    }
+
+    send_next_data_passthrough<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
+        local_sender_channel,
+        local_sender_channel_worker_interface,
+        outbound_to_receiver_channel_pointers,
+        remote_receiver_channel,
+        local_fabric_telemetry);
+
+    // Update local TX counters: split responsibility in multi-ERISC mode
+    if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+        update_bw_counters(pkt_header, local_fabric_telemetry);
+    }
+    increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+/*
+    // Process COMPLETIONs from receiver
+    int32_t const completions_since_last_check =
+        sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+
+    if (completions_since_last_check) {
+        outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
+        sender_channel_from_receiver_credits.increment_num_processed_completions(completions_since_last_check);
+
+        // When first level ack is enabled, then credits can be sent to upstream workers as soon as we see
+        // the ack, we don't need to wait for the completion from receiver. Therefore, only when we have
+        // first level ack disabled will we send credits to workers on receipt of completion acknowledgements.
+        if constexpr (!enable_first_level_ack) {
+            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                local_sender_channel_worker_interface, completions_since_last_check, channel_connection_established);
+        }
+    }
+
+    // Process ACKs from receiver
+    // ACKs are processed second to avoid any sort of races. If we process acks second,
+    // we are guaranteed to see equal to or greater the number of acks than completions
+    if constexpr (enable_first_level_ack) {
+        auto acks_since_last_check = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        if (acks_since_last_check > 0) {
+            sender_channel_from_receiver_credits.increment_num_processed_acks(acks_since_last_check);
+            send_credits_to_upstream_workers<enable_deadlock_avoidance, SKIP_CONNECTION_LIVENESS_CHECK>(
+                local_sender_channel_worker_interface, acks_since_last_check, channel_connection_established);
+        }
+    }
+*/
+    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
+        auto check_connection_status =
+            !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
+        if (check_connection_status) {
+            check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+                local_sender_channel_worker_interface,
+                channel_connection_established,
+                sender_channel_free_slots_stream_id);
+        }
+    }
+};
+
+
 ////////////////////////////////////
 ////////////////////////////////////
 //  Main Control Loop
@@ -1645,12 +1576,52 @@ FORCE_INLINE
     } else {
         receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     }
-    uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
-    bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
+    uint32_t const free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
+    bool const has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
+    // fast path for passthrough channels - only if no credits pending
+    bool const is_txq_not_busy = !internal_::eth_txq_is_busy(sender_txq_id);
+    
+    // Check if credits are pending - if so, must process them
+    bool credits_pending = false;
+    if constexpr (enable_first_level_ack) {
+        auto acks = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        credits_pending = (acks > 0);
+    } else {
+        auto completions = sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+        credits_pending = (completions > 0);
+    }
+
+    if(is_txq_not_busy && can_send && !credits_pending) {
+        did_something = true;
+        progress = true;
+        
+        // Inline fast path - no function call overhead, no credit processing
+        auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
+            local_sender_channel.get_cached_next_buffer_slot_addr());
+        if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
+            update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
+        }
+
+        send_next_data_passthrough<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
+            local_sender_channel,
+            local_sender_channel_worker_interface,
+            outbound_to_receiver_channel_pointers,
+            remote_receiver_channel,
+            local_fabric_telemetry);
+
+        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
+            update_bw_counters(pkt_header, local_fabric_telemetry);
+        }
+        increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
+
+        // Skip duplicate send in slow path
+        can_send = false;
+    }
+
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
+        can_send = can_send && is_txq_not_busy;
     }
     if (can_send) {
         did_something = true;
@@ -1667,6 +1638,7 @@ FORCE_INLINE
             outbound_to_receiver_channel_pointers,
             remote_receiver_channel,
             perf_telemetry_recorder);
+
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -1712,6 +1684,7 @@ FORCE_INLINE
                 sender_channel_free_slots_stream_id);
         }
     }
+
     return progress;
 };
 
