@@ -1527,6 +1527,75 @@ FORCE_INLINE
     }
 };
 
+template <
+    uint8_t sender_channel_index,
+    uint8_t to_receiver_pkts_sent_id,
+    bool SKIP_CONNECTION_LIVENESS_CHECK,
+    typename SenderChannelT,
+    typename WorkerInterfaceT,
+    typename ReceiverPointersT,
+    typename ReceiverChannelT,
+    typename LocalTelemetryT>
+FORCE_INLINE void
+run_sender_channel_step_fast_impl(
+        SenderChannelT& local_sender_channel,
+        WorkerInterfaceT& local_sender_channel_worker_interface,
+        ReceiverPointersT& outbound_to_receiver_channel_pointers,
+        ReceiverChannelT& remote_receiver_channel,
+        bool& channel_connection_established,
+        uint32_t const sender_channel_free_slots_stream_id,
+        LocalTelemetryT& local_fabric_telemetry) {
+
+    send_next_data_passthrough<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
+        local_sender_channel,
+        local_sender_channel_worker_interface,
+        outbound_to_receiver_channel_pointers,
+        remote_receiver_channel,
+        local_fabric_telemetry);
+
+    if constexpr (!SKIP_CONNECTION_LIVENESS_CHECK) {
+        auto check_connection_status =
+            !channel_connection_established || local_sender_channel_worker_interface.has_worker_teardown_request();
+        if (check_connection_status) {
+            check_worker_connections<MY_ETH_CHANNEL, ENABLE_RISC_CPU_DATA_CACHE>(
+                local_sender_channel_worker_interface,
+                channel_connection_established,
+                sender_channel_free_slots_stream_id);
+        }
+    }        
+}
+
+template <
+    uint8_t sender_channel_index,
+    uint8_t to_receiver_pkts_sent_id,
+    bool SKIP_CONNECTION_LIVENESS_CHECK,
+    typename SenderChannelT,
+    typename WorkerInterfaceT,
+    typename ReceiverPointersT,
+    typename ReceiverChannelT,
+    typename LocalTelemetryT>
+FORCE_INLINE void
+run_sender_channel_step_fast(
+        SenderChannelT& local_sender_channel,
+        WorkerInterfaceT& local_sender_channel_worker_interface,
+        ReceiverPointersT& outbound_to_receiver_channel_pointers,
+        ReceiverChannelT& remote_receiver_channel,
+        bool& channel_connection_established,
+        uint32_t const sender_channel_free_slots_stream_id,
+        LocalTelemetryT& local_fabric_telemetry) {
+    run_sender_channel_step_fast_impl<
+        sender_channel_index,
+        to_receiver_pkts_sent_id,
+        SKIP_CONNECTION_LIVENESS_CHECK>(
+            local_sender_channel,
+            local_sender_channel_worker_interface,
+            outbound_to_receiver_channel_pointers,
+            remote_receiver_channel,
+            channel_connection_established,
+            sender_channel_free_slots_stream_id,
+            local_fabric_telemetry
+        );
+}
 
 ////////////////////////////////////
 ////////////////////////////////////
@@ -1576,52 +1645,12 @@ FORCE_INLINE
     } else {
         receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     }
-    uint32_t const free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
-    bool const has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
+    uint32_t free_slots = get_ptr_val(sender_channel_free_slots_stream_id);
+    bool has_unsent_packet = free_slots != WorkerInterfaceT::num_buffers;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
-    // fast path for passthrough channels - only if no credits pending
-    bool const is_txq_not_busy = !internal_::eth_txq_is_busy(sender_txq_id);
-    
-    // Check if credits are pending - if so, must process them
-    bool credits_pending = false;
-    if constexpr (enable_first_level_ack) {
-        auto acks = sender_channel_from_receiver_credits.template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
-        credits_pending = (acks > 0);
-    } else {
-        auto completions = sender_channel_from_receiver_credits.template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
-        credits_pending = (completions > 0);
-    }
-
-    if(is_txq_not_busy && can_send && !credits_pending) {
-        did_something = true;
-        progress = true;
-        
-        // Inline fast path - no function call overhead, no credit processing
-        auto* pkt_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            local_sender_channel.get_cached_next_buffer_slot_addr());
-        if constexpr (!UPDATE_PKT_HDR_ON_RX_CH) {
-            update_packet_header_before_eth_send<sender_channel_index>(pkt_header);
-        }
-
-        send_next_data_passthrough<sender_channel_index, to_receiver_pkts_sent_id, SKIP_CONNECTION_LIVENESS_CHECK>(
-            local_sender_channel,
-            local_sender_channel_worker_interface,
-            outbound_to_receiver_channel_pointers,
-            remote_receiver_channel,
-            local_fabric_telemetry);
-
-        if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
-            update_bw_counters(pkt_header, local_fabric_telemetry);
-        }
-        increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
-
-        // Skip duplicate send in slow path
-        can_send = false;
-    }
-
     if constexpr (!ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA) {
-        can_send = can_send && is_txq_not_busy;
+        can_send = can_send && !internal_::eth_txq_is_busy(sender_txq_id);
     }
     if (can_send) {
         did_something = true;
@@ -1636,9 +1665,7 @@ FORCE_INLINE
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
-            remote_receiver_channel,
             perf_telemetry_recorder);
-
         // Update local TX counters: split responsibility in multi-ERISC mode
         if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
             update_bw_counters(pkt_header, local_fabric_telemetry);
@@ -1684,7 +1711,6 @@ FORCE_INLINE
                 sender_channel_free_slots_stream_id);
         }
     }
-
     return progress;
 };
 
@@ -1978,6 +2004,61 @@ FORCE_INLINE bool run_receiver_channel_step(
     return false;
 }
 
+template<bool ENABLE_RISC_CPU_DATA_CACHE, typename SenderChannelFromReceiverCredits>
+constexpr auto get_unprocessed_credits(SenderChannelFromReceiverCredits & sender_channel_from_receiver_credits) {
+    if constexpr (ENABLE_RISC_CPU_DATA_CACHE) {
+        return sender_channel_from_receiver_credits
+            .template get_num_unprocessed_acks_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+    } else {
+        return sender_channel_from_receiver_credits
+            .template get_num_unprocessed_completions_from_receiver<ENABLE_RISC_CPU_DATA_CACHE>();
+    }
+}
+
+template<typename WorkerInterfaceIndexType>
+constexpr auto get_num_buffers(WorkerInterfaceIndexType&) {
+    return WorkerInterfaceIndexType::num_buffers;
+}
+
+template<
+    uint8_t Index,
+    bool ENABLE_RISC_CPU_DATA_CACHE,
+    typename WorkerInterfaceT,
+    typename OutboundReceiverChannelPointers,
+    typename LocalSenderChannelFreeSlotsStreamId,
+    typename SenderChannelFromReceiverCredit
+>
+#if !defined(FABRIC_2D_VC1_ACTIVE)
+FORCE_INLINE
+#endif
+bool fast_path_check(
+    OutboundReceiverChannelPointers& outbound_to_receiver_channel_pointers,
+    LocalSenderChannelFreeSlotsStreamId const local_sender_channel_free_slots_stream_id,
+    SenderChannelFromReceiverCredit & sender_channel_from_receiver_credit,
+    WorkerInterfaceT & local_sender_channel_worker_interfaces
+) {
+    if constexpr(is_sender_channel_serviced[Index] == false) {
+        return false;
+    }
+
+    bool const use_bubble_flow_control = 
+        sender_channel_is_traffic_injection_channel[Index] && enable_deadlock_avoidance;
+    
+    bool receiver_has_space;
+    if (use_bubble_flow_control) {
+        receiver_has_space = outbound_to_receiver_channel_pointers.num_free_slots >=
+                            BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS;
+    } else {
+        receiver_has_space = outbound_to_receiver_channel_pointers.has_space_for_packet();
+    }
+
+    return receiver_has_space &&
+        !internal_::eth_txq_is_busy(sender_txq_id) &&
+        get_ptr_val(local_sender_channel_free_slots_stream_id) != get_num_buffers(local_sender_channel_worker_interfaces.template get<Index>()) &&
+        get_unprocessed_credits<ENABLE_RISC_CPU_DATA_CACHE>(sender_channel_from_receiver_credit);
+}
+
+
 /*
  * Main control loop for fabric EDM. Run indefinitely until a termination signal is received
  *
@@ -2083,11 +2164,204 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         }
 
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
+
+            if(fast_path_check<0U, ENABLE_RISC_CPU_DATA_CACHE>(outbound_to_receiver_channel_pointer_ch0, local_sender_channel_free_slots_stream_ids[0U], sender_channel_from_receiver_credits[0U], local_sender_channel_worker_interfaces)) {
+                run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established[0U],
+                local_sender_channel_free_slots_stream_ids[0U],
+                local_fabric_telemetry);
+            }
+            else {
+                run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector,
+                local_fabric_telemetry);
+            }
+#if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+            // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
+            // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
+            rx_progress |= run_receiver_channel_step<
+                0,
+                ENABLE_FIRST_LEVEL_ACK_VC0,
+                DownstreamSenderVC1T,
+                decltype(local_relay_interface)>(
+                local_receiver_channels,
+                downstream_edm_noc_interfaces_vc1,
+                local_relay_interface,
+                receiver_channel_pointers_ch0,
+                receiver_channel_0_trid_tracker,
+                port_direction_table,
+                receiver_channel_response_credit_senders,
+                routing_table,
+                local_fabric_telemetry);
+#else
+            rx_progress |= run_receiver_channel_step<
+                0,
+                ENABLE_FIRST_LEVEL_ACK_VC0,
+                DownstreamSenderVC0T,
+                decltype(local_relay_interface)>(
+                local_receiver_channels,
+                downstream_edm_noc_interfaces_vc0,
+                local_relay_interface,
+                receiver_channel_pointers_ch0,
+                receiver_channel_0_trid_tracker,
+                port_direction_table,
+                receiver_channel_response_credit_senders,
+                routing_table,
+                local_fabric_telemetry);
+#endif            
+            if(fast_path_check<1U, ENABLE_RISC_CPU_DATA_CACHE>(outbound_to_receiver_channel_pointer_ch0, local_sender_channel_free_slots_stream_ids[1U], sender_channel_from_receiver_credits[1U], local_sender_channel_worker_interfaces)) {
+                run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established[1U],
+                local_sender_channel_free_slots_stream_ids[1U],
+                local_fabric_telemetry);
+            }
+            else {
+                run_sender_channel_step<VC0_RECEIVER_CHANNEL, 1, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector,
+                local_fabric_telemetry);
+            }
+            if(fast_path_check<2U, ENABLE_RISC_CPU_DATA_CACHE>(outbound_to_receiver_channel_pointer_ch0, local_sender_channel_free_slots_stream_ids[2U], sender_channel_from_receiver_credits[2U], local_sender_channel_worker_interfaces)) {
+                run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established[2U],
+                local_sender_channel_free_slots_stream_ids[2U],
+                local_fabric_telemetry);
+            }
+            else {
+                run_sender_channel_step<VC0_RECEIVER_CHANNEL, 2, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector,
+                local_fabric_telemetry);
+            }            
+            if(fast_path_check<3U, ENABLE_RISC_CPU_DATA_CACHE>(outbound_to_receiver_channel_pointer_ch0, local_sender_channel_free_slots_stream_ids[3U], sender_channel_from_receiver_credits[3U], local_sender_channel_worker_interfaces)) {
+                run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established[3U],
+                local_sender_channel_free_slots_stream_ids[3U],
+                local_fabric_telemetry);
+            }
+            else {
+                run_sender_channel_step<VC0_RECEIVER_CHANNEL, 3, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector,
+                local_fabric_telemetry);
+            }
+#if defined(FABRIC_2D_VC1_SERVICED)
+
+            if(fast_path_check<4U, ENABLE_RISC_CPU_DATA_CACHE>(outbound_to_receiver_channel_pointer_ch0, local_sender_channel_free_slots_stream_ids[4U], sender_channel_from_receiver_credits[4U], local_sender_channel_worker_interfaces)) {
+                run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established[4U],
+                local_sender_channel_free_slots_stream_ids[4U],
+                local_fabric_telemetry);
+            }
+            else {
+                run_sender_channel_step<VC0_RECEIVER_CHANNEL, 4, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector,
+                local_fabric_telemetry);
+            }
+            if(fast_path_check<5U, ENABLE_RISC_CPU_DATA_CACHE>(outbound_to_receiver_channel_pointer_ch0, local_sender_channel_free_slots_stream_ids[5U], sender_channel_from_receiver_credits[5U], local_sender_channel_worker_interfaces)) {
+                run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 5, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established[5U],
+                local_sender_channel_free_slots_stream_ids[5U],
+                local_fabric_telemetry);
+            }
+            else {
+                run_sender_channel_step<VC0_RECEIVER_CHANNEL, 5, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector,
+                local_fabric_telemetry);
+            }
+            if(fast_path_check<6U, ENABLE_RISC_CPU_DATA_CACHE>(outbound_to_receiver_channel_pointer_ch0, local_sender_channel_free_slots_stream_ids[6U], sender_channel_from_receiver_credits[6U], local_sender_channel_worker_interfaces)) {
+                run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 6, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established[6U],
+                local_sender_channel_free_slots_stream_ids[6U],
+                local_fabric_telemetry);
+            }
+            else {
+                run_sender_channel_step<VC0_RECEIVER_CHANNEL, 6, ENABLE_FIRST_LEVEL_ACK_VC0>(
+                local_sender_channels,
+                local_sender_channel_worker_interfaces,
+                outbound_to_receiver_channel_pointer_ch0,
+                remote_receiver_channels,
+                channel_connection_established,
+                local_sender_channel_free_slots_stream_ids,
+                local_fabric_telemetry);
+            }
+#endif            
+        }
+/*
+        for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
             // Capture these to see if we made progress
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
             // so we interoduce this to provide finer grain control over when we disable the automatic switching
+
             tx_progress |= run_sender_channel_step<VC0_RECEIVER_CHANNEL, 0, ENABLE_FIRST_LEVEL_ACK_VC0>(
                 local_sender_channels,
                 local_sender_channel_worker_interfaces,
@@ -2210,7 +2484,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 #endif  // FABRIC_2D_VC1_SERVICED
             }
         }
-
+*/
         // Compute idle conditions and update heartbeats in one helper
         if constexpr (FABRIC_TELEMETRY_ANY_DYNAMIC_STAT) {
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -2256,6 +2530,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
         }
     }
+
 }
 
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
