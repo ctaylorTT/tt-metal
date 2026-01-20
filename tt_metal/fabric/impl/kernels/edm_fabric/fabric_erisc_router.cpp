@@ -515,6 +515,80 @@ FORCE_INLINE void update_packet_header_before_eth_send(volatile tt_l1_ptr PACKET
 #endif
 }
 
+FORCE_INLINE bool txq_is_busy() {
+    return internal_::eth_txq_is_busy(sender_txq_id);
+}
+
+FORCE_INLINE void txq_quiet() {
+    while (internal_::eth_txq_is_busy(sender_txq_id)) {
+    };   
+}
+
+#if 0
+// Ethernet TX queue wrapper
+// Note: Currently only Tx is supported. Rx can be added later if needed.
+struct Tx {
+    FORCE_INLINE static void quiet() {
+        while (internal_::eth_txq_is_busy(sender_txq_id)) {
+        };
+    }
+
+    FORCE_INLINE static bool is_busy() {
+        return internal_::eth_txq_is_busy(sender_txq_id);
+    }
+
+    FORCE_INLINE static void send_packet_bytes_unsafe(
+        uint32_t src_addr, uint32_t dest_addr, size_t size_bytes) {
+        internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, size_bytes);
+    }
+};
+
+template<typename EthQueueKind>
+struct EthQueue {
+    static_assert(std::is_same_v<EthQueueKind, Tx>, "Unsupported channel type for EthQueue");
+
+    using eth_queue_kind = EthQueueKind;
+
+    FORCE_INLINE static void quiet() {
+        eth_queue_kind::quiet();
+    }    
+
+    FORCE_INLINE static bool is_busy() {
+        return eth_queue_kind::is_busy();
+    }
+
+    FORCE_INLINE static void send_packet_bytes_unsafe(
+        uint32_t src_addr, uint32_t dest_addr, size_t size_bytes) {
+        eth_queue_kind::send_packet_bytes_unsafe(src_addr, dest_addr, size_bytes);
+    }
+};
+
+using TxQueue = EthQueue<Tx>;
+
+template<typename EthQueueType>
+struct EthEndpoint {
+    static_assert(std::is_same_v<EthQueueType, TxQueue>, "Unsupported channel type for Eth");
+
+    using eth_queue_type = EthQueueType;
+
+    FORCE_INLINE static bool is_busy() {
+        return eth_queue_type::is_busy();
+    }
+    
+    // Block (spin-wait) until the Ethernet TX queue is no longer busy
+    FORCE_INLINE static void quiet() {
+        eth_queue_type::quiet();
+    }
+
+    FORCE_INLINE static void send_packet_bytes_unsafe(
+        uint32_t src_addr, uint32_t dest_addr, size_t size_bytes) {
+        eth_queue_type::send_packet_bytes_unsafe(src_addr, dest_addr, size_bytes);
+    }   
+};
+
+using EthEndpointTxq = EthEndpoint<TxQueue>;
+#endif
+
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -1354,7 +1428,6 @@ FORCE_INLINE void send_credits_to_upstream_workers(
     }
 }
 
-
 template <
     uint8_t sender_channel_index,
     uint8_t to_receiver_pkts_sent_id,
@@ -1373,13 +1446,19 @@ FORCE_INLINE void send_next_data_fast(
     SenderChannelFromReceiverCredits & sender_channel_from_receiver_credit,
     LocalTelemetryT& local_fabric_telemetry) {
 
-    auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
-    auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
+    auto& remote_receiver_buffer_index =
+        outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
+    auto& remote_receiver_num_free_slots =
+        outbound_to_receiver_channel_pointers.num_free_slots;
 
-    uint32_t const src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
-    volatile auto* pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
-    size_t const payload_size_bytes = pkt_header->get_payload_size_including_header();
-    auto const dest_addr = receiver_buffer_channel.get_cached_next_buffer_slot_addr();
+    uint32_t const src_addr =
+        sender_buffer_channel.get_cached_next_buffer_slot_addr();
+    volatile auto* pkt_header =
+        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(src_addr);
+    size_t const payload_size_bytes =
+        pkt_header->get_payload_size_including_header();
+    auto const dest_addr =
+        receiver_buffer_channel.get_cached_next_buffer_slot_addr();
 
     if constexpr (!skip_src_ch_id_update) {
         pkt_header->src_ch_id = sender_channel_index;
@@ -1420,6 +1499,8 @@ FORCE_INLINE void send_next_data_fast(
                 sender_worker_interface, completions_since_last_check, true);
         } 
     }
+
+    txq_quiet();
 }
 
 template <typename LocalTelemetryT>
@@ -2034,7 +2115,7 @@ bool fast_path_check(
     std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>&  sender_channel_from_receiver_credits,
     WorkerInterfaceT & local_sender_channel_worker_interfaces
 ) {
-    bool is_busy = internal_::eth_txq_is_busy(sender_txq_id);
+    bool is_busy = txq_is_busy();
 
     if(!is_busy) {
         // this check `is_sender_channel_serviced[0U]` is critical for accessing some template expanded array accesses
@@ -2208,20 +2289,21 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             open_perf_recording_window(inner_loop_perf_telemetry_collector);
         }
 
+        bool fast_path_condition = false;
         // outbound receiver pointer -> outbound_to_receiver_channel_pointer_ch0
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
-        bool const fast_path_condition = 
-            fast_path_check<ENABLE_RISC_CPU_DATA_CACHE>(
-                outbound_to_receiver_channel_pointer_ch0,
-                local_sender_channel_free_slots_stream_ids,
-                sender_channel_from_receiver_credits,
-                local_sender_channel_worker_interfaces
-            );
-        
-        if(fast_path_condition) {
-            for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
-                router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+        for (uint32_t i = 0U; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
+
+            fast_path_condition = 
+                fast_path_check<ENABLE_RISC_CPU_DATA_CACHE>(
+                    outbound_to_receiver_channel_pointer_ch0,
+                    local_sender_channel_free_slots_stream_ids,
+                    sender_channel_from_receiver_credits,
+                    local_sender_channel_worker_interfaces
+                );
+    
+            if(fast_path_condition) {
                 tx_progress |= true;
                 run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 0U, ENABLE_FIRST_LEVEL_ACK_VC0>(
                     local_sender_channels,
@@ -2272,6 +2354,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     local_sender_channel_free_slots_stream_ids,
                     sender_channel_from_receiver_credits,
                     local_fabric_telemetry);
+                
                 if constexpr (is_2d_fabric) {
                     run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 2U, ENABLE_FIRST_LEVEL_ACK_VC0>(
                         local_sender_channels,
@@ -2327,15 +2410,12 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         port_direction_table,
                         receiver_channel_response_credit_senders,
                         routing_table,
-                        local_fabric_telemetry);
+                        local_fabric_telemetry);                
 #endif
                 }
             }
-        }
-        else {
-            for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
+            else {
                 router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
-
                 // Capture these to see if we made progress
 
                 // There are some cases, mainly for performance, where we don't want to switch between sender channels
@@ -2510,7 +2590,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             }
         }
     }
-
 }
 
 template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
