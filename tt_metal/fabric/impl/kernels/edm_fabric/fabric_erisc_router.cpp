@@ -519,7 +519,7 @@ FORCE_INLINE bool txq_is_busy() {
     return internal_::eth_txq_is_busy(sender_txq_id);
 }
 
-FORCE_INLINE void txq_quiet() {
+FORCE_INLINE void txq_wait() {
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };   
 }
@@ -1480,6 +1480,7 @@ FORCE_INLINE void send_next_data_fast(
     remote_receiver_num_free_slots--;
 
     record_packet_send(local_fabric_telemetry, sender_channel_index, payload_size_bytes);
+    txq_wait();
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(1U);
 
     if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
@@ -1499,8 +1500,6 @@ FORCE_INLINE void send_next_data_fast(
                 sender_worker_interface, completions_since_last_check, true);
         } 
     }
-
-    txq_quiet();
 }
 
 template <typename LocalTelemetryT>
@@ -2346,6 +2345,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     routing_table,
                     local_fabric_telemetry);
 #endif
+                txq_wait();              
                 run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 1U, ENABLE_FIRST_LEVEL_ACK_VC0>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
@@ -2356,6 +2356,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     local_fabric_telemetry);
                 
                 if constexpr (is_2d_fabric) {
+                    txq_wait();
                     run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 2U, ENABLE_FIRST_LEVEL_ACK_VC0>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
@@ -2364,6 +2365,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_sender_channel_free_slots_stream_ids,
                         sender_channel_from_receiver_credits,
                         local_fabric_telemetry);
+                    txq_wait();                  
                     run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 3U, ENABLE_FIRST_LEVEL_ACK_VC0>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
@@ -2373,6 +2375,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         sender_channel_from_receiver_credits,
                         local_fabric_telemetry);
 #if defined(FABRIC_2D_VC1_SERVICED)
+                    txq_wait();                  
                     run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 4U, ENABLE_FIRST_LEVEL_ACK_VC0>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
@@ -2381,6 +2384,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_sender_channel_free_slots_stream_ids,
                         sender_channel_from_receiver_credits,                        
                         local_fabric_telemetry);
+                    txq_wait();                  
                     run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 5U, ENABLE_FIRST_LEVEL_ACK_VC0>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
@@ -2389,6 +2393,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_sender_channel_free_slots_stream_ids,
                         sender_channel_from_receiver_credits,                        
                         local_fabric_telemetry);
+                    txq_wait();
                     run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 6U, ENABLE_FIRST_LEVEL_ACK_VC0>(
                         local_sender_channels,
                         local_sender_channel_worker_interfaces,
