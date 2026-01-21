@@ -2436,7 +2436,6 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     receiver_channel_response_credit_senders,
                     routing_table,
                     local_fabric_telemetry);
-#endif
                 run_sender_channel_step_fast<VC0_RECEIVER_CHANNEL, 1U, ENABLE_FIRST_LEVEL_ACK_VC0>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
